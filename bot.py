@@ -534,14 +534,30 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
     user_request = f"Ниша: {niche}. Цель: {goal}. Формат: {format_type}"
     context.user_data['user_request'] = user_request
 
-    # Генерируем идеи с typing action (показываем "печатает..." пока AI думает)
-    system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
-    user_prompt = get_ideas_user_prompt(user_request)
+    try:
+        # Генерируем идеи с typing action (показываем "печатает..." пока AI думает)
+        system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+        user_prompt = get_ideas_user_prompt(user_request)
 
-    ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+        ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
 
-    # Парсим идеи
-    ideas = parse_ideas(ideas_text)
+        # Парсим идеи
+        ideas = parse_ideas(ideas_text)
+    except Exception as e:
+        logger.error(f"Ошибка при генерации идей: {e}")
+
+        # Формируем сообщение об ошибке
+        error_msg = f"Ой, {user_name}, кажется возникла проблема с генерацией 😔\n\n"
+
+        error_str = str(e)
+        if "429" in error_str or "rate limit" in error_str.lower():
+            error_msg += "Похоже что исчерпан лимит бесплатных запросов к AI на сегодня.\n\n"
+            error_msg += "Попробуй чуть позже или используй платную модель API 💡"
+        else:
+            error_msg += "Что-то пошло не так с AI сервисом. Попробуй ещё раз через минутку 🔄"
+
+        await send_message_with_typing(update, error_msg, reply_markup=get_main_menu_keyboard())
+        return ConversationHandler.END
 
     if not ideas or len(ideas) < 5:
         # Если парсинг не удался
@@ -614,14 +630,30 @@ async def handle_reuse_confirmation(update: Update, context: ContextTypes.DEFAUL
         # Сохраняем запрос
         context.user_data['user_request'] = user_request
 
-        # Генерируем идеи напрямую (копируем логику из get_format_and_generate)
-        system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
-        user_prompt = get_ideas_user_prompt(user_request)
+        try:
+            # Генерируем идеи напрямую (копируем логику из get_format_and_generate)
+            system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+            user_prompt = get_ideas_user_prompt(user_request)
 
-        ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+            ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
 
-        # Парсим идеи
-        ideas = parse_ideas_response(ideas_text)
+            # Парсим идеи
+            ideas = parse_ideas_response(ideas_text)
+        except Exception as e:
+            logger.error(f"Ошибка при генерации идей (reuse): {e}")
+
+            # Формируем сообщение об ошибке
+            error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
+
+            error_str = str(e)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                error_msg += "Похоже что исчерпан лимит бесплатных запросов к AI на сегодня.\n\n"
+                error_msg += "Попробуй чуть позже или используй платную модель API 💡"
+            else:
+                error_msg += "Что-то пошло не так с AI сервисом. Попробуй ещё раз через минутку 🔄"
+
+            await send_message_with_typing(update, error_msg, reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
 
         if not ideas:
             # Если не удалось распарсить идеи
@@ -1038,13 +1070,21 @@ RESPONSE: [твой естественный ответ Каролины]
 
     except Exception as e:
         logger.error(f"Ошибка в handle_free_text: {e}")
-        # Fallback на простой ответ
-        fallback_responses = [
-            f"Я много в чем сильна, {user_name}, но моя задача - помогать генерировать идеи для контента! 💡 Давай придумаем ещё парочку? Нажимай '🆕 Новый запрос' 😊",
-            f"{user_name}, моя специализация - контент и идеи! 🎨 Хочешь создадим что-то крутое? Жми '🆕 Новый запрос'!",
-            f"Я тут больше по контенту и идеям! ✍️ Давай лучше сделаем классный пост? Нажимай '🆕 Новый запрос', {user_name}! 🚀"
-        ]
-        await send_message_with_typing(update, random.choice(fallback_responses), reply_markup=get_main_menu_keyboard())
+
+        # Если AI недоступен - просто начинаем новую сессию
+        # (предполагаем что пользователь хочет создать контент)
+        error_msg = f"Извини, {user_name}, у меня небольшие технические трудности 😅"
+
+        # Проверяем тип ошибки
+        error_str = str(e)
+        if "429" in error_str or "rate limit" in error_str.lower():
+            error_msg += "\n\nПохоже что я исчерпала лимит бесплатных запросов на сегодня 😔"
+            error_msg += "\n\nНо не переживай! Я всё равно могу помочь - просто без AI-помощника буду работать чуть проще."
+            error_msg += "\n\nДавай попробуем создать контент? Нажми '🆕 Новый запрос' 💪"
+        else:
+            error_msg += "\n\nДавай попробуем ещё раз? Нажми '🆕 Новый запрос' 😊"
+
+        await send_message_with_typing(update, error_msg, reply_markup=get_main_menu_keyboard())
 
 
 # ========== ВЫБОР ИДЕИ И ГЕНЕРАЦИЯ ПОСТА ==========
@@ -1091,11 +1131,27 @@ async def handle_idea_selection(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = SYSTEM_PROMPT + "\n\n" + POST_GENERATION_PROMPT
     user_prompt = get_post_user_prompt(user_request, selected_idea_text)
 
-    # Генерируем пост с typing action (показываем "печатает..." пока AI думает)
-    post_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+    try:
+        # Генерируем пост с typing action (показываем "печатает..." пока AI думает)
+        post_text = await call_openai_with_typing(update, system_prompt, user_prompt)
 
-    # Сохраняем пост в контексте
-    context.user_data['generated_post'] = post_text
+        # Сохраняем пост в контексте
+        context.user_data['generated_post'] = post_text
+    except Exception as e:
+        logger.error(f"Ошибка при генерации поста: {e}")
+
+        # Формируем сообщение об ошибке
+        error_msg = "Ой, кажется возникла проблема при генерации поста 😔\n\n"
+
+        error_str = str(e)
+        if "429" in error_str or "rate limit" in error_str.lower():
+            error_msg += "Похоже что исчерпан лимит бесплатных запросов к AI на сегодня.\n\n"
+            error_msg += "Попробуй чуть позже или используй платную модель API 💡"
+        else:
+            error_msg += "Что-то пошло не так с AI сервисом. Попробуй ещё раз через минутку 🔄"
+
+        await query.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+        return
 
     # Кнопки после генерации поста
     keyboard = [
