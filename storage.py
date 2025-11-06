@@ -1,0 +1,91 @@
+"""
+Модуль для работы с хранением данных
+"""
+import json
+import os
+from datetime import datetime
+from typing import Dict, List, Any
+from config import HISTORY_FILE, DATA_DIR
+
+
+class Storage:
+    """Класс для работы с историей пользователей"""
+
+    def __init__(self):
+        self._ensure_data_dir()
+        self._ensure_history_file()
+
+    def _ensure_data_dir(self):
+        """Создает директорию data если её нет"""
+        if not os.path.exists(DATA_DIR):
+            os.makedirs(DATA_DIR)
+
+    def _ensure_history_file(self):
+        """Создает файл истории если его нет"""
+        if not os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump({}, f, ensure_ascii=False, indent=2)
+
+    def _load_history(self) -> Dict:
+        """Загружает историю из файла"""
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Ошибка загрузки истории: {e}")
+            return {}
+
+    def _save_history(self, history: Dict):
+        """Сохраняет историю в файл"""
+        try:
+            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Ошибка сохранения истории: {e}")
+
+    def get_user_history(self, user_id: int) -> List[Dict]:
+        """Получает историю конкретного пользователя"""
+        history = self._load_history()
+        user_id_str = str(user_id)
+        return history.get(user_id_str, [])
+
+    def add_to_history(self, user_id: int, item: Dict):
+        """Добавляет запись в историю пользователя"""
+        history = self._load_history()
+        user_id_str = str(user_id)
+
+        if user_id_str not in history:
+            history[user_id_str] = []
+
+        # Добавляем timestamp
+        item['timestamp'] = datetime.now().isoformat()
+
+        history[user_id_str].append(item)
+        self._save_history(history)
+
+    def save_favorite(self, user_id: int, request: str, idea: str, post: str):
+        """Сохраняет избранный пост"""
+        self.add_to_history(user_id, {
+            'type': 'favorite',
+            'request': request,
+            'idea': idea,
+            'post': post
+        })
+
+    def get_favorites(self, user_id: int) -> List[Dict]:
+        """Получает все избранные посты пользователя"""
+        user_history = self.get_user_history(user_id)
+        return [item for item in user_history if item.get('type') == 'favorite']
+
+    def clear_user_history(self, user_id: int):
+        """Очищает историю пользователя"""
+        history = self._load_history()
+        user_id_str = str(user_id)
+
+        if user_id_str in history:
+            history[user_id_str] = []
+            self._save_history(history)
+
+
+# Создаем глобальный экземпляр
+storage = Storage()
