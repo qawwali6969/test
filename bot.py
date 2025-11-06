@@ -644,11 +644,11 @@ async def show_history_page(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     keyboard = []
     for i, fav in enumerate(page_posts):
         actual_idx = start_idx + i  # Реальный индекс в полном списке
-        request = fav.get('request', 'Без запроса')
+        idea = fav.get('idea', 'Без описания')
         timestamp = fav.get('timestamp', '')[:10]  # Только дата
 
-        # Миниатюра: первые 40 символов запроса + дата
-        preview = request[:40] + "..." if len(request) > 40 else request
+        # Миниатюра: первые 50 символов идеи
+        preview = idea[:50] + "..." if len(idea) > 50 else idea
         button_text = f"#{actual_idx + 1} • {preview}"
 
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"view_post_{actual_idx}_{page}")])
