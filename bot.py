@@ -3,7 +3,9 @@ Telegram-бот для генерации контент-идей с помощ�
 """
 import logging
 import re
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -44,6 +46,27 @@ logger = logging.getLogger(__name__)
 
 # Состояния для ConversationHandler
 ASKING_NAME, ASKING_NICHE, ASKING_GOAL, ASKING_FORMAT = range(4)
+
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+async def send_typing_action(update: Update, duration: float = 1.0):
+    """Отправляет действие 'печатает...' на указанное время"""
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    await asyncio.sleep(duration)
+
+
+async def send_message_with_typing(update: Update, text: str, **kwargs):
+    """Отправляет сообщение с имитацией печатания"""
+    # Рассчитываем время печатания (0.03 сек на символ, макс 5 сек, мин 0.5 сек)
+    typing_duration = min(max(len(text) * 0.03, 0.5), 5.0)
+
+    # Показываем "печатает..."
+    await send_typing_action(update, typing_duration)
+
+    # Отправляем сообщение
+    return await update.message.reply_text(text, **kwargs)
+
 
 # Инициализация AI клиента
 if USE_OPENROUTER:
@@ -115,7 +138,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Как тебя зовут?"""
 
-    await update.message.reply_text(welcome_text)
+    await send_message_with_typing(update, welcome_text)
     return ASKING_NAME
 
 
@@ -145,7 +168,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Просто напиши своими словами - какая у тебя ниша."""
 
-    await update.message.reply_text(response)
+    await send_message_with_typing(update, response)
     return ASKING_NICHE
 
 
@@ -170,7 +193,7 @@ async def get_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Какая у тебя главная цель для этого контента?"""
 
-    await update.message.reply_text(response)
+    await send_message_with_typing(update, response)
     return ASKING_GOAL
 
 
@@ -196,7 +219,7 @@ async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Что тебе нужно?"""
 
-    await update.message.reply_text(response)
+    await send_message_with_typing(update, response)
     return ASKING_FORMAT
 
 
@@ -211,14 +234,14 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
     logger.info(f"📝 Формат: {format_type}")
     logger.info(f"🚀 Генерация для: ниша={niche}, цель={goal}, формат={format_type}")
 
-    # Отправляем сообщение что думаем
-    thinking_msg = await update.message.reply_text(
-        f"Супер, {user_name}! Все данные собраны 📋\n\n"
-        f"Ниша: {niche}\n"
-        f"Цель: {goal}\n"
-        f"Формат: {format_type}\n\n"
-        f"Сейчас придумаю для тебя идеи... 🤔"
-    )
+    # Показываем "печатает..." и отправляем сообщение
+    summary_text = f"Супер, {user_name}! Все данные собраны 📋\n\n" \
+                   f"Ниша: {niche}\n" \
+                   f"Цель: {goal}\n" \
+                   f"Формат: {format_type}\n\n" \
+                   f"Сейчас придумаю для тебя идеи... 🤔"
+
+    thinking_msg = await send_message_with_typing(update, summary_text)
 
     # Формируем запрос для AI
     user_request = f"Ниша: {niche}. Цель: {goal}. Формат: {format_type}"
@@ -238,10 +261,13 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
 
     if not ideas or len(ideas) < 5:
         # Если парсинг не удался
-        await update.message.reply_text(
-            f"Вот идеи для тебя, {user_name}:\n\n{ideas_text}\n\n"
-            "Напиши номер идеи (1-5), чтобы я написала готовый пост."
-        )
+        fallback_text = f"Вот идеи для тебя, {user_name}:\n\n{ideas_text}\n\n" \
+                       "Напиши номер идеи (1-5), чтобы я написала готовый пост."
+
+        # Показываем typing перед отправкой
+        await send_typing_action(update, 2.0)
+        await update.message.reply_text(fallback_text)
+
         context.user_data['ideas_text'] = ideas_text
         context.user_data['ideas_raw'] = True
         return ConversationHandler.END
@@ -261,13 +287,15 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Отправляем идеи
+    # Отправляем идеи с имитацией печатания
     response_text = f"Готово, {user_name}! Вот 5 идей для тебя:\n\n"
     for idea in ideas:
         response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
 
     response_text += "Выбирай какая нравится - напишу готовый пост! 👇"
 
+    # Показываем typing перед отправкой идей
+    await send_typing_action(update, 3.0)  # 3 секунды - идеи большие
     await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     return ConversationHandler.END
@@ -276,9 +304,8 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена разговора"""
     user_name = context.user_data.get('user_name', 'дружище')
-    await update.message.reply_text(
-        f"Хорошо, {user_name}! Если захочешь начать заново - просто напиши /start 😊"
-    )
+    cancel_text = f"Хорошо, {user_name}! Если захочешь начать заново - просто напиши /start 😊"
+    await send_message_with_typing(update, cancel_text)
     return ConversationHandler.END
 
 
