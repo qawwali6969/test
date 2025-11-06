@@ -14,7 +14,17 @@ from telegram.ext import (
 )
 from openai import OpenAI
 
-from config import TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TEMPERATURE
+from config import (
+    TELEGRAM_BOT_TOKEN,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    OPENAI_TEMPERATURE,
+    OPENAI_BASE_URL,
+    USE_OPENROUTER,
+    OPENROUTER_API_KEY,
+    OPENROUTER_APP_NAME,
+    OPENROUTER_SITE_URL
+)
 from prompts import (
     SYSTEM_PROMPT,
     IDEAS_GENERATION_PROMPT,
@@ -31,8 +41,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация OpenAI клиента
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+# Инициализация AI клиента
+if USE_OPENROUTER:
+    # Используем OpenRouter
+    openai_client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENAI_BASE_URL,
+        default_headers={
+            "HTTP-Referer": OPENROUTER_SITE_URL,
+            "X-Title": OPENROUTER_APP_NAME,
+        } if OPENROUTER_SITE_URL else {}
+    )
+    logger.info(f"🔄 Используется OpenRouter с моделью: {OPENAI_MODEL}")
+else:
+    # Используем обычный OpenAI
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    logger.info(f"🤖 Используется OpenAI с моделью: {OPENAI_MODEL}")
 
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
