@@ -744,7 +744,8 @@ def main():
         entry_points=[
             CommandHandler("start", start_command),
             CommandHandler("new", start_command),  # /new тоже запускает диалог
-            MessageHandler(menu_filter, handle_menu_buttons)  # Кнопки меню
+            MessageHandler(menu_filter, handle_menu_buttons),  # Кнопки меню
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text)  # Свободный текст → entry point
         ],
         states={
             ASKING_NAME: [
@@ -781,13 +782,6 @@ def main():
     application.add_handler(CallbackQueryHandler(
         handle_post_actions,
         pattern="^(save_favorite|another_idea|new_request)$"
-    ))
-
-    # Обработчик свободных текстовых сообщений (должен быть последним!)
-    # Срабатывает только когда нет активного conversation
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_free_text
     ))
 
     # Запускаем бота
