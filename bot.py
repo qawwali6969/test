@@ -4,6 +4,7 @@ Telegram-бот для генерации контент-идей с помощ�
 import logging
 import re
 import asyncio
+import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -131,6 +132,30 @@ def get_main_menu_keyboard():
         [KeyboardButton("❌ Отмена")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_random_thinking_phrase():
+    """Возвращает случайную фразу Каролины при обдумывании идей"""
+    phrases = [
+        "Сейчас придумаю для тебя идеи... 🤔",
+        "Щас что-нибудь интересное накидаю! 💡",
+        "Минутку, уже думаю над идеями! 🧠",
+        "Сейчас придумаю что-то крутое! ✨",
+        "Дай мне секунду, придумываю варианты! 💭"
+    ]
+    return random.choice(phrases)
+
+
+def get_random_writing_phrase(idea_number):
+    """Возвращает случайную фразу Каролины при написании поста"""
+    phrases = [
+        f"Щас напишу пост по идее #{idea_number}! ✍️",
+        f"Минутку, пишу для тебя пост! 📝",
+        f"Сейчас сделаю пост из идеи #{idea_number}! 💫",
+        f"Щас придумаю что-нибудь крутое! 🎨",
+        f"Уже пишу, будет огонь! 🔥"
+    ]
+    return random.choice(phrases)
 
 
 # ========== КОМАНДЫ БОТА ==========
@@ -282,7 +307,7 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
                    f"Ниша: {niche}\n" \
                    f"Цель: {goal}\n" \
                    f"Формат: {format_type}\n\n" \
-                   f"Сейчас придумаю для тебя идеи... 🤔"
+                   f"{get_random_thinking_phrase()}"
 
     thinking_msg = await send_message_with_typing(update, summary_text)
 
@@ -385,10 +410,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if request:
             text += f"📋 Запрос: {request}\n\n"
         text += f"💡 Идея: {idea}\n\n"
-        text += f"📝 Пост:\n{post}\n"
+        text += f"📝 Пост:\n```\n{post}\n```\n"
+        text += "💡 _Нажми на текст поста чтобы скопировать_\n"
         text += "—" * 30
 
-        await update.message.reply_text(text)
+        await update.message.reply_text(text, parse_mode='Markdown')
 
 
 async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -439,6 +465,56 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text)
 
 
+async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик свободных текстовых сообщений вне conversation"""
+    user_id = update.effective_user.id
+    user_name = storage.get_user_name(user_id) or "дружище"
+    text = update.message.text.lower().strip()
+
+    logger.info(f"💬 Свободное сообщение от {user_name}: {text}")
+
+    # Понимание намерений пользователя
+    if any(word in text for word in ['новый', 'начать', 'заново', 'start', 'new', 'запрос', 'создать']):
+        # Хочет начать новый запрос
+        return await start_command(update, context)
+
+    elif any(word in text for word in ['пост', 'история', 'history', 'сохранен', 'избранное', 'мои посты']):
+        # Хочет посмотреть сохранённые посты
+        return await history_command(update, context)
+
+    elif any(word in text for word in ['помощь', 'help', 'команд', 'что умеешь', 'как работать']):
+        # Нужна помощь
+        return await help_command(update, context)
+
+    elif any(word in text for word in ['привет', 'здравствуй', 'hi', 'hello', 'хай', 'прив']):
+        # Приветствие
+        responses = [
+            f"Привет, {user_name}! 👋 Готова помочь с контентом! Нажми '🆕 Новый запрос' чтобы начать.",
+            f"Здорово, {user_name}! 😊 Давай создадим что-то крутое? Жми '🆕 Новый запрос'!",
+            f"Привет-привет, {user_name}! 🎨 Начнём работать? Нажми '🆕 Новый запрос'!"
+        ]
+        await send_message_with_typing(update, random.choice(responses), reply_markup=get_main_menu_keyboard())
+
+    elif any(word in text for word in ['спасибо', 'благодар', 'thanks', 'thx', 'от души']):
+        # Благодарность
+        responses = [
+            f"Пожалуйста, {user_name}! 😊 Рада помочь!",
+            f"Всегда пожалуйста! 💫 Обращайся если что!",
+            f"Рада стараться для тебя! ✨",
+            "Не за что! 🤗 Всегда рада помочь!"
+        ]
+        await send_message_with_typing(update, random.choice(responses), reply_markup=get_main_menu_keyboard())
+
+    else:
+        # Не понял намерение - дружеский ответ
+        responses = [
+            f"Не совсем поняла, {user_name} 🤔 Лучше воспользуйся кнопками внизу или напиши /start чтобы начать!",
+            f"{user_name}, давай воспользуемся кнопками? Нажми '🆕 Новый запрос' чтобы создать контент! 😊",
+            f"Хм, не уверена что поняла 🤷‍♀️ Попробуй нажать на кнопки внизу или напиши /help для справки!",
+        ]
+        await send_message_with_typing(update, random.choice(responses), reply_markup=get_main_menu_keyboard())
+
+
 # ========== ВЫБОР ИДЕИ И ГЕНЕРАЦИЯ ПОСТА ==========
 
 
@@ -475,7 +551,7 @@ async def handle_idea_selection(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['selected_idea'] = selected_idea
 
     # Сообщение "генерация"
-    await query.edit_message_text(f"⚙️ Генерирую пост на основе идеи #{idea_number}...")
+    await query.edit_message_text(get_random_writing_phrase(idea_number))
 
     # Формируем промпт для генерации поста
     selected_idea_text = f"{selected_idea['title']}\n{selected_idea['description']}"
@@ -622,6 +698,13 @@ def main():
     application.add_handler(CallbackQueryHandler(
         handle_post_actions,
         pattern="^(save_favorite|another_idea|new_request)$"
+    ))
+
+    # Обработчик свободных текстовых сообщений (должен быть последним!)
+    # Срабатывает только когда нет активного conversation
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_free_text
     ))
 
     # Запускаем бота
