@@ -160,19 +160,40 @@ def get_random_writing_phrase(idea_number):
 
 # ========== КОМАНДЫ БОТА ==========
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start - начало диалога с Каролиной"""
-    logger.info(f"📥 Пользователь: {update.effective_user.id}")
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE, skip_greeting: bool = False):
+    """Обработчик команды /start - начало диалога с Каролиной
+
+    Args:
+        skip_greeting: Если True - пропускает приветствие (продолжение сессии)
+    """
+    logger.info(f"📥 Пользователь: {update.effective_user.id}, skip_greeting={skip_greeting}")
 
     user_id = update.effective_user.id
     saved_name = storage.get_user_name(user_id)
 
-    # Если имя уже сохранено - пропускаем вопрос
+    # Если имя уже сохранено
     if saved_name:
         context.user_data['user_name'] = saved_name
         logger.info(f"👤 Возвращается пользователь: {saved_name}")
 
-        welcome_text = f"""👋 Привет, {saved_name}! Рада тебя снова видеть!
+        if skip_greeting:
+            # Продолжение сессии - сразу к делу без приветствия
+            niche_text = f"""**Ниша**
+
+В какой области ты создаёшь контент? Это может быть что угодно:
+• Фитнес и здоровье
+• Бизнес и предпринимательство
+• Образование и обучение
+• Технологии и IT
+• Психология и саморазвитие
+• Кулинария
+• Или что-то другое?
+
+Просто напиши своими словами - какая у тебя ниша."""
+            await send_message_with_typing(update, niche_text, reply_markup=get_main_menu_keyboard())
+        else:
+            # Новая сессия через кнопку - показываем приветствие
+            welcome_text = f"""👋 Привет, {saved_name}! Рада тебя снова видеть!
 
 Давай создадим что-то крутое?
 
@@ -188,8 +209,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Или что-то другое?
 
 Просто напиши своими словами - какая у тебя ниша."""
+            await send_message_with_typing(update, welcome_text, reply_markup=get_main_menu_keyboard())
 
-        await send_message_with_typing(update, welcome_text, reply_markup=get_main_menu_keyboard())
         return ASKING_NICHE
 
     # Если имя не сохранено - спрашиваем
@@ -479,25 +500,42 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Пользователь {user_name} написал: "{user_text}"
 
 Твои возможности:
-1. Создавать новые идеи и посты (команда: NEW_REQUEST)
-2. Показывать сохранённые посты (команда: SHOW_HISTORY)
-3. Давать помощь/справку (команда: HELP)
-4. Приветствовать/общаться (команда: GREETING)
-5. Благодарить (команда: THANKS)
+1. GENERATE_IDEAS - Сразу начать генерацию идей (фразы: "давай еще идеи", "придумай еще", "есть ли еще идеи", "еще 5 идей", "новые идеи", "создай идеи")
+2. NEW_REQUEST - Начать новую сессию с приветствием (фразы: "новый запрос", "начать заново", "с нуля")
+3. SHOW_HISTORY - Показать сохранённые посты (фразы: "покажи посты", "мои посты", "история", "что сохранял")
+4. HELP - Дать помощь/справку (фразы: "помощь", "что умеешь", "команды")
+5. GREETING - Приветствие (фразы: "привет", "здравствуй", "хай")
+6. THANKS - Благодарность (фразы: "спасибо", "благодарю")
+7. OTHER - Всё остальное
+
+ВАЖНО:
+- Если просят "еще идеи", "давай еще", "придумай еще" - это GENERATE_IDEAS (сразу генерация, без приветствия)
+- Если "новый запрос", "начать заново" - это NEW_REQUEST (с приветствием)
 
 Проанализируй сообщение и определи намерение. Ответь в формате:
 
-INTENT: [одна из команд выше или OTHER если не подходит]
+INTENT: [одна из команд выше]
 RESPONSE: [твой естественный ответ Каролины]
+
+ТРЕБОВАНИЯ К ОТВЕТУ:
+1. РАЗНООБРАЗИЕ - каждый ответ должен быть УНИКАЛЬНЫМ
+2. Используй разные стили:
+   - Иногда короткий и энергичный: "Окей, поехали! 🚀"
+   - Иногда более развёрнутый: "Отличная идея, {user_name}! Сейчас придумаем ещё крутых вариантов 💡"
+   - Иногда игривый: "Ооо, ещё порцию идей? Легко! ✨"
+3. Варьируй эмодзи: 💡🚀✨🔥💫🎨✍️🎯💪
+4. Разные конструкции предложений
+5. Разная длина (от 1 до 3 предложений)
 
 Если намерение OTHER (вопросы не связанные с генерацией контента):
 - Мягко скажи что твоя задача - помогать с генерацией идей для контента
 - Предложи создать новые идеи
 - Используй разговорный стиль: "я много в чем сильна, но моя задача - помогать с контентом"
-- Закончи призывом к действию: "давай придумаем ещё идей? нажимай '🆕 Новый запрос'"
+- Закончи призывом к действию
 - Будь дружелюбной, не формальной
+- ОБЯЗАТЕЛЬНО варьируй ответы! Никогда не повторяйся!
 
-Пиши коротко (1-2 предложения), естественно, с эмодзи."""
+Пиши естественно, с эмодзи."""
 
     try:
         # Получаем ответ от AI
@@ -527,9 +565,15 @@ RESPONSE: [твой естественный ответ Каролины]
             intent_line = "OTHER"
 
         # Выполняем соответствующее действие
-        if 'NEW_REQUEST' in intent_line.upper():
+        if 'GENERATE_IDEAS' in intent_line.upper():
+            # Фразы типа "давай еще идеи" - сразу к генерации БЕЗ приветствия
             await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
-            return await start_command(update, context)
+            return await start_command(update, context, skip_greeting=True)
+
+        elif 'NEW_REQUEST' in intent_line.upper():
+            # "Новый запрос" - с приветствием
+            await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
+            return await start_command(update, context, skip_greeting=False)
 
         elif 'SHOW_HISTORY' in intent_line.upper():
             await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
