@@ -58,15 +58,61 @@ async def send_typing_action(update: Update, duration: float = 1.0):
 
 
 async def send_message_with_typing(update: Update, text: str, **kwargs):
-    """Отправляет сообщение с имитацией печатания"""
-    # Рассчитываем время печатания (0.015 сек на символ, макс 2.5 сек, мин 0.3 сек)
-    typing_duration = min(max(len(text) * 0.015, 0.3), 2.5)
-
-    # Показываем "печатает..."
-    await send_typing_action(update, typing_duration)
+    """Отправляет сообщение с имитацией печатания (минимум 1 секунда)"""
+    # Минимум 1 секунда печатания для обычных сообщений
+    await send_typing_action(update, 1.0)
 
     # Отправляем сообщение
     return await update.message.reply_text(text, **kwargs)
+
+
+async def call_openai_with_typing(update: Update, system_prompt: str, user_prompt: str, temperature: float = OPENAI_TEMPERATURE, max_tokens: int = 2000):
+    """Вызывает OpenAI API с отображением typing action во время ожидания
+
+    Показывает "печатает..." пока ждём ответ от сервера (минимум 1 секунда)
+    """
+    import time
+
+    start_time = time.time()
+
+    # Запускаем typing action (повторяем каждые 4 секунды пока ждём)
+    async def keep_typing():
+        while True:
+            await update.effective_chat.send_action(ChatAction.TYPING)
+            await asyncio.sleep(4)  # Telegram typing действует ~5 сек
+
+    # Запускаем typing в фоне
+    typing_task = asyncio.create_task(keep_typing())
+
+    try:
+        # Делаем запрос к AI
+        response = await asyncio.to_thread(
+            openai_client.chat.completions.create,
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+        result = response.choices[0].message.content.strip()
+
+        # Гарантируем минимум 1 секунду typing
+        elapsed = time.time() - start_time
+        if elapsed < 1.0:
+            await asyncio.sleep(1.0 - elapsed)
+
+        return result
+
+    finally:
+        # Останавливаем typing
+        typing_task.cancel()
+        try:
+            await typing_task
+        except asyncio.CancelledError:
+            pass
 
 
 # Инициализация AI клиента
@@ -158,7 +204,7 @@ def get_random_writing_phrase(idea_number):
     return random.choice(phrases)
 
 
-async def validate_user_answer(user_answer: str, question_context: str, user_name: str) -> dict:
+async def validate_user_answer(update: Update, user_answer: str, question_context: str, user_name: str) -> dict:
     """Валидирует ответ пользователя с помощью AI
 
     Returns:
@@ -216,14 +262,14 @@ RESPONSE: [твой ответ Каролины если нужно (для QUES
 Будь дружелюбной, используй эмодзи, пиши естественно."""
 
     try:
-        response = openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": validation_prompt}],
+        # Используем typing во время валидации
+        ai_response = await call_openai_with_typing(
+            update,
+            "",  # Без системного промпта
+            validation_prompt,
             temperature=0.7,
             max_tokens=150
         )
-
-        ai_response = response.choices[0].message.content.strip()
 
         # Парсим ответ
         status = "VALID"
@@ -369,7 +415,7 @@ async def get_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🎯 Попытка ввода ниши: {niche}")
 
     # Валидируем ответ
-    validation = await validate_user_answer(niche, "нишу (тематику контента)", user_name)
+    validation = await validate_user_answer(update, niche, "нишу (тематику контента)", user_name)
 
     if validation['status'] == 'OFF_TOPIC':
         # Совсем не по теме - restart
@@ -412,7 +458,7 @@ async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🎯 Попытка ввода цели: {goal}")
 
     # Валидируем ответ
-    validation = await validate_user_answer(goal, "цель контента (что хочешь достичь)", user_name)
+    validation = await validate_user_answer(update, goal, "цель контента (что хочешь достичь)", user_name)
 
     if validation['status'] == 'OFF_TOPIC':
         # Совсем не по теме - restart
@@ -457,7 +503,7 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
     logger.info(f"📝 Попытка ввода формата: {format_type}")
 
     # Валидируем ответ
-    validation = await validate_user_answer(format_type, "формат контента (пост, статья, видео и т.д.)", user_name)
+    validation = await validate_user_answer(update, format_type, "формат контента (пост, статья, видео и т.д.)", user_name)
 
     if validation['status'] == 'OFF_TOPIC':
         # Совсем не по теме - restart
@@ -482,20 +528,17 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
                    f"Формат: {format_type}\n\n" \
                    f"{get_random_thinking_phrase()}"
 
-    thinking_msg = await send_message_with_typing(update, summary_text)
+    await send_message_with_typing(update, summary_text)
 
     # Формируем запрос для AI
     user_request = f"Ниша: {niche}. Цель: {goal}. Формат: {format_type}"
     context.user_data['user_request'] = user_request
 
-    # Генерируем идеи
+    # Генерируем идеи с typing action (показываем "печатает..." пока AI думает)
     system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
     user_prompt = get_ideas_user_prompt(user_request)
 
-    ideas_text = await call_openai(system_prompt, user_prompt)
-
-    # Удаляем сообщение "думаю"
-    await thinking_msg.delete()
+    ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
 
     # Парсим идеи
     ideas = parse_ideas(ideas_text)
@@ -712,15 +755,14 @@ RESPONSE: [твой естественный ответ Каролины]
 Пиши естественно, с эмодзи."""
 
     try:
-        # Получаем ответ от AI
-        response = openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": intent_prompt}],
+        # Получаем ответ от AI с typing action
+        ai_response = await call_openai_with_typing(
+            update,
+            "",  # Без системного промпта
+            intent_prompt,
             temperature=0.8,
             max_tokens=200
         )
-
-        ai_response = response.choices[0].message.content.strip()
         logger.info(f"🤖 AI ответ: {ai_response}")
 
         # Парсим ответ
@@ -841,8 +883,8 @@ async def handle_idea_selection(update: Update, context: ContextTypes.DEFAULT_TY
     system_prompt = SYSTEM_PROMPT + "\n\n" + POST_GENERATION_PROMPT
     user_prompt = get_post_user_prompt(user_request, selected_idea_text)
 
-    # Генерируем пост
-    post_text = await call_openai(system_prompt, user_prompt)
+    # Генерируем пост с typing action (показываем "печатает..." пока AI думает)
+    post_text = await call_openai_with_typing(update, system_prompt, user_prompt)
 
     # Сохраняем пост в контексте
     context.user_data['generated_post'] = post_text
