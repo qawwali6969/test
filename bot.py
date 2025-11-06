@@ -1072,6 +1072,72 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"💬 Свободное сообщение от {user_name}: {user_text}")
 
+    # АВТОСТАРТ: Если текст похож на запрос контента, пробуем сразу распарсить
+    if looks_like_content_request(user_text):
+        logger.info(f"🎯 Автостарт: текст похож на запрос контента")
+        parsed = smart_parse_user_request(user_text)
+        missing = extract_missing_fields(parsed)
+
+        if len(missing) == 0:
+            # ВСЕ параметры есть - сразу генерируем без вопросов!
+            logger.info(f"✨ Умный парсер (автостарт) извлек все параметры: {parsed}")
+
+            context.user_data['niche'] = parsed['niche']
+            context.user_data['goal'] = parsed['goal']
+            context.user_data['format'] = parsed['format']
+            context.user_data['user_name'] = user_name
+
+            user_request = f"{parsed['niche']}, {parsed['goal']}, {parsed['format']}"
+            context.user_data['user_request'] = user_request
+
+            await send_message_with_typing(update, f"Понятно! Генерирую идеи для {parsed['niche']} 🚀", reply_markup=get_main_menu_keyboard())
+
+            try:
+                system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+                user_prompt = get_ideas_user_prompt(user_request)
+                ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+                ideas = parse_ideas(ideas_text)
+            except Exception as e:
+                logger.error(f"Ошибка при генерации идей (автостарт): {e}")
+                error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    error_msg += "Исчерпан лимит бесплатных запросов. Попробуй позже 💡"
+                else:
+                    error_msg += "Что-то пошло не так. Попробуй ещё раз 🔄"
+                await update.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+                return ConversationHandler.END
+
+            if not ideas or len(ideas) < 5:
+                fallback_text = f"Вот идеи для тебя, {user_name}:\n\n{ideas_text}\n\n"
+                fallback_text += "Напиши номер идеи (1-5) для генерации поста"
+                await update.message.reply_text(fallback_text)
+                context.user_data['ideas_text'] = ideas_text
+                context.user_data['ideas_raw'] = True
+                return ConversationHandler.END
+
+            context.user_data['ideas'] = ideas
+            context.user_data['ideas_text'] = ideas_text
+
+            keyboard = []
+            for idea in ideas:
+                button_text = f"💡 {idea['number']}. {idea['title']}"
+                keyboard.append([InlineKeyboardButton(button_text, callback_data=f"idea_{idea['number']}")])
+
+            keyboard.append([
+                InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+                InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            response_text = f"Готово, {user_name}! Вот 5 идей:\n\n"
+            for idea in ideas:
+                response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
+            response_text += "Выбирай какая нравится! 👇"
+
+            await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return ConversationHandler.END
+
     # Используем AI для понимания намерений
     intent_prompt = f"""Ты - Каролина, личный креативный ассистент по генерации контент-идей. Ты женщина, используй женский род.
 
@@ -1197,8 +1263,76 @@ RESPONSE: [твой естественный ответ Каролины]
                 return await start_command(update, context, skip_greeting=True)
 
         elif 'GENERATE_IDEAS' in intent_line.upper():
-            # Фразы типа "давай еще идеи" - проверяем есть ли предыдущие параметры
+            # Фразы типа "давай еще идеи" - пробуем распарсить из текста
             await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
+
+            # Сначала пробуем извлечь параметры из самого текста
+            parsed = smart_parse_user_request(user_text)
+            missing = extract_missing_fields(parsed)
+
+            if len(missing) == 0:
+                # ВСЕ параметры извлечены из текста - сразу генерируем!
+                logger.info(f"✨ Умный парсер извлек все параметры: {parsed}")
+
+                context.user_data['niche'] = parsed['niche']
+                context.user_data['goal'] = parsed['goal']
+                context.user_data['format'] = parsed['format']
+
+                # Сразу переходим к генерации (пропускаем все вопросы!)
+                user_request = f"{parsed['niche']}, {parsed['goal']}, {parsed['format']}"
+                context.user_data['user_request'] = user_request
+
+                # Генерируем идеи
+                await send_message_with_typing(update, f"Понятно! Генерирую идеи для {parsed['niche']} 🚀", reply_markup=get_main_menu_keyboard())
+
+                try:
+                    system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+                    user_prompt = get_ideas_user_prompt(user_request)
+                    ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+                    ideas = parse_ideas(ideas_text)
+                except Exception as e:
+                    logger.error(f"Ошибка при генерации идей (smart parse): {e}")
+                    error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
+                    if "429" in str(e) or "rate limit" in str(e).lower():
+                        error_msg += "Исчерпан лимит бесплатных запросов. Попробуй позже 💡"
+                    else:
+                        error_msg += "Что-то пошло не так. Попробуй ещё раз 🔄"
+                    await update.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+                    return ConversationHandler.END
+
+                if not ideas or len(ideas) < 5:
+                    # Fallback
+                    fallback_text = f"Вот идеи для тебя, {user_name}:\n\n{ideas_text}\n\n"
+                    fallback_text += "Напиши номер идеи (1-5) для генерации поста"
+                    await update.message.reply_text(fallback_text)
+                    context.user_data['ideas_text'] = ideas_text
+                    context.user_data['ideas_raw'] = True
+                    return ConversationHandler.END
+
+                # Сохраняем идеи
+                context.user_data['ideas'] = ideas
+                context.user_data['ideas_text'] = ideas_text
+
+                # Формируем кнопки
+                keyboard = []
+                for idea in ideas:
+                    button_text = f"💡 {idea['number']}. {idea['title']}"
+                    keyboard.append([InlineKeyboardButton(button_text, callback_data=f"idea_{idea['number']}")])
+
+                keyboard.append([
+                    InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+                    InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+                ])
+
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                response_text = f"Готово, {user_name}! Вот 5 идей:\n\n"
+                for idea in ideas:
+                    response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
+                response_text += "Выбирай какая нравится! 👇"
+
+                await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
+                return ConversationHandler.END
 
             # Проверяем есть ли сохраненные параметры
             has_previous = (
