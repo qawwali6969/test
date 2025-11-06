@@ -9,6 +9,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ConversationHandler,
     ContextTypes,
     filters
 )
@@ -40,6 +41,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Состояния для ConversationHandler
+ASKING_NAME, ASKING_NICHE, ASKING_GOAL, ASKING_FORMAT = range(4)
 
 # Инициализация AI клиента
 if USE_OPENROUTER:
