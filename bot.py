@@ -59,8 +59,8 @@ async def send_typing_action(update: Update, duration: float = 1.0):
 
 async def send_message_with_typing(update: Update, text: str, **kwargs):
     """Отправляет сообщение с имитацией печатания"""
-    # Рассчитываем время печатания (0.03 сек на символ, макс 5 сек, мин 0.5 сек)
-    typing_duration = min(max(len(text) * 0.03, 0.5), 5.0)
+    # Рассчитываем время печатания (0.015 сек на символ, макс 2.5 сек, мин 0.3 сек)
+    typing_duration = min(max(len(text) * 0.015, 0.3), 2.5)
 
     # Показываем "печатает..."
     await send_typing_action(update, typing_duration)
@@ -469,50 +469,88 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик свободных текстовых сообщений вне conversation"""
     user_id = update.effective_user.id
     user_name = storage.get_user_name(user_id) or "дружище"
-    text = update.message.text.lower().strip()
+    user_text = update.message.text.strip()
 
-    logger.info(f"💬 Свободное сообщение от {user_name}: {text}")
+    logger.info(f"💬 Свободное сообщение от {user_name}: {user_text}")
 
-    # Понимание намерений пользователя
-    if any(word in text for word in ['новый', 'начать', 'заново', 'start', 'new', 'запрос', 'создать']):
-        # Хочет начать новый запрос
-        return await start_command(update, context)
+    # Используем AI для понимания намерений
+    intent_prompt = f"""Ты - Каролина, личный креативный ассистент по генерации контент-идей. Ты женщина, используй женский род.
 
-    elif any(word in text for word in ['пост', 'история', 'history', 'сохранен', 'избранное', 'мои посты']):
-        # Хочет посмотреть сохранённые посты
-        return await history_command(update, context)
+Пользователь {user_name} написал: "{user_text}"
 
-    elif any(word in text for word in ['помощь', 'help', 'команд', 'что умеешь', 'как работать']):
-        # Нужна помощь
-        return await help_command(update, context)
+Твои возможности:
+1. Создавать новые идеи и посты (команда: NEW_REQUEST)
+2. Показывать сохранённые посты (команда: SHOW_HISTORY)
+3. Давать помощь/справку (команда: HELP)
+4. Приветствовать/общаться (команда: GREETING)
+5. Благодарить (команда: THANKS)
 
-    elif any(word in text for word in ['привет', 'здравствуй', 'hi', 'hello', 'хай', 'прив']):
-        # Приветствие
-        responses = [
-            f"Привет, {user_name}! 👋 Готова помочь с контентом! Нажми '🆕 Новый запрос' чтобы начать.",
-            f"Здорово, {user_name}! 😊 Давай создадим что-то крутое? Жми '🆕 Новый запрос'!",
-            f"Привет-привет, {user_name}! 🎨 Начнём работать? Нажми '🆕 Новый запрос'!"
+Проанализируй сообщение и определи намерение. Ответь в формате:
+
+INTENT: [одна из команд выше или OTHER если не подходит]
+RESPONSE: [твой естественный ответ Каролины]
+
+Если намерение OTHER (вопросы не связанные с генерацией контента):
+- Мягко скажи что твоя задача - помогать с генерацией идей для контента
+- Предложи создать новые идеи
+- Используй разговорный стиль: "я много в чем сильна, но моя задача - помогать с контентом"
+- Закончи призывом к действию: "давай придумаем ещё идей? нажимай '🆕 Новый запрос'"
+- Будь дружелюбной, не формальной
+
+Пиши коротко (1-2 предложения), естественно, с эмодзи."""
+
+    try:
+        # Получаем ответ от AI
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": intent_prompt}],
+            temperature=0.8,
+            max_tokens=200
+        )
+
+        ai_response = response.choices[0].message.content.strip()
+        logger.info(f"🤖 AI ответ: {ai_response}")
+
+        # Парсим ответ
+        intent_line = ""
+        response_line = ""
+
+        for line in ai_response.split('\n'):
+            if line.startswith('INTENT:'):
+                intent_line = line.replace('INTENT:', '').strip()
+            elif line.startswith('RESPONSE:'):
+                response_line = line.replace('RESPONSE:', '').strip()
+
+        # Если не удалось распарсить - используем весь ответ
+        if not response_line:
+            response_line = ai_response
+            intent_line = "OTHER"
+
+        # Выполняем соответствующее действие
+        if 'NEW_REQUEST' in intent_line.upper():
+            await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
+            return await start_command(update, context)
+
+        elif 'SHOW_HISTORY' in intent_line.upper():
+            await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
+            return await history_command(update, context)
+
+        elif 'HELP' in intent_line.upper():
+            return await help_command(update, context)
+
+        else:
+            # Любой другой случай - отправляем ответ AI
+            await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
+
+    except Exception as e:
+        logger.error(f"Ошибка в handle_free_text: {e}")
+        # Fallback на простой ответ
+        fallback_responses = [
+            f"Я много в чем сильна, {user_name}, но моя задача - помогать генерировать идеи для контента! 💡 Давай придумаем ещё парочку? Нажимай '🆕 Новый запрос' 😊",
+            f"{user_name}, моя специализация - контент и идеи! 🎨 Хочешь создадим что-то крутое? Жми '🆕 Новый запрос'!",
+            f"Я тут больше по контенту и идеям! ✍️ Давай лучше сделаем классный пост? Нажимай '🆕 Новый запрос', {user_name}! 🚀"
         ]
-        await send_message_with_typing(update, random.choice(responses), reply_markup=get_main_menu_keyboard())
-
-    elif any(word in text for word in ['спасибо', 'благодар', 'thanks', 'thx', 'от души']):
-        # Благодарность
-        responses = [
-            f"Пожалуйста, {user_name}! 😊 Рада помочь!",
-            f"Всегда пожалуйста! 💫 Обращайся если что!",
-            f"Рада стараться для тебя! ✨",
-            "Не за что! 🤗 Всегда рада помочь!"
-        ]
-        await send_message_with_typing(update, random.choice(responses), reply_markup=get_main_menu_keyboard())
-
-    else:
-        # Не понял намерение - дружеский ответ
-        responses = [
-            f"Не совсем поняла, {user_name} 🤔 Лучше воспользуйся кнопками внизу или напиши /start чтобы начать!",
-            f"{user_name}, давай воспользуемся кнопками? Нажми '🆕 Новый запрос' чтобы создать контент! 😊",
-            f"Хм, не уверена что поняла 🤷‍♀️ Попробуй нажать на кнопки внизу или напиши /help для справки!",
-        ]
-        await send_message_with_typing(update, random.choice(responses), reply_markup=get_main_menu_keyboard())
+        await send_message_with_typing(update, random.choice(fallback_responses), reply_markup=get_main_menu_keyboard())
 
 
 # ========== ВЫБОР ИДЕИ И ГЕНЕРАЦИЯ ПОСТА ==========
