@@ -2,10 +2,17 @@
 Конфигурация бота
 """
 import os
-from dotenv import load_dotenv
+from pathlib import Path
 
-# Загружаем переменные окружения
-load_dotenv()
+# Загружаем переменные окружения из .env (если файл существует)
+# На Replit используются Secrets, поэтому .env не нужен
+env_file = Path('.env')
+if env_file.exists():
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ Загружены переменные из .env файла")
+else:
+    print("ℹ️  .env файл не найден, используем переменные окружения (Replit Secrets)")
 
 # API ключи
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -39,11 +46,23 @@ HISTORY_FILE = f"{DATA_DIR}/user_history.json"
 
 # Проверка наличия ключей
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN не установлен! Проверьте файл .env")
+    raise ValueError(
+        "❌ TELEGRAM_BOT_TOKEN не установлен!\n"
+        "Для Replit: добавьте в Secrets (🔒 на левой панели)\n"
+        "Для локального запуска: создайте .env файл и добавьте туда ключ"
+    )
 
 if USE_OPENROUTER:
     if not OPENROUTER_API_KEY:
-        raise ValueError("OPENROUTER_API_KEY не установлен! Проверьте файл .env")
+        raise ValueError(
+            "❌ OPENROUTER_API_KEY не установлен!\n"
+            "Для Replit: добавьте в Secrets (🔒 на левой панели)\n"
+            "Для локального запуска: создайте .env файл и добавьте туда ключ"
+        )
 else:
     if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY не установлен! Проверьте файл .env")
+        raise ValueError(
+            "❌ OPENAI_API_KEY не установлен!\n"
+            "Для Replit: добавьте в Secrets (🔒 на левой панели)\n"
+            "Для локального запуска: создайте .env файл и добавьте туда ключ"
+        )
