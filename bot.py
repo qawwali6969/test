@@ -726,6 +726,114 @@ async def handle_reuse_confirmation(update: Update, context: ContextTypes.DEFAUL
         return ASKING_REUSE_PARAMS
 
 
+async def handle_reuse_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Да, оставить' - генерирует с теми же параметрами"""
+    query = update.callback_query
+    await query.answer()
+
+    user_name = context.user_data.get('user_name') or storage.get_user_name(update.effective_user.id) or "дружище"
+
+    await query.edit_message_text(f"Отлично, {user_name}! Генерирую новые идеи 🚀")
+
+    # Используем сохраненные параметры
+    niche = context.user_data.get('niche')
+    goal = context.user_data.get('goal')
+    format_name = context.user_data.get('format')
+    user_request = f"{niche}, {goal}, {format_name}"
+
+    # Сохраняем запрос
+    context.user_data['user_request'] = user_request
+
+    try:
+        # Генерируем идеи
+        system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+        user_prompt = get_ideas_user_prompt(user_request)
+
+        ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+        ideas = parse_ideas_response(ideas_text)
+    except Exception as e:
+        logger.error(f"Ошибка при генерации идей (reuse yes): {e}")
+        error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            error_msg += "Исчерпан лимит бесплатных запросов. Попробуй позже 💡"
+        else:
+            error_msg += "Что-то пошло не так. Попробуй ещё раз 🔄"
+        await query.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+        return ConversationHandler.END
+
+    if not ideas:
+        # Fallback если парсинг не удался
+        fallback_text = f"Вот идеи для тебя, {user_name}! 💡\n\n{ideas_text}\n\n"
+        fallback_text += "Выбери номер идеи (1-5) и я напишу полный пост!"
+        await query.message.reply_text(fallback_text)
+        context.user_data['ideas_text'] = ideas_text
+        context.user_data['ideas_raw'] = True
+        return ConversationHandler.END
+
+    # Сохраняем идеи
+    context.user_data['ideas'] = ideas
+    context.user_data['ideas_text'] = ideas_text
+
+    # Формируем кнопки
+    keyboard = []
+    for idea in ideas:
+        button_text = f"💡 {idea['number']}. {idea['title']}"
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"idea_{idea['number']}"
+        )])
+
+    # Дополнительные кнопки
+    keyboard.append([
+        InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+        InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+    ])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Отправляем идеи
+    response_text = f"Готово, {user_name}! Вот 5 новых идей:\n\n"
+    for idea in ideas:
+        response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
+    response_text += "Выбирай какая нравится! 👇"
+
+    await query.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
+    return ConversationHandler.END
+
+
+async def handle_reuse_edit_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Изменить нишу'"""
+    query = update.callback_query
+    await query.answer()
+
+    user_name = context.user_data.get('user_name') or storage.get_user_name(update.effective_user.id) or "дружище"
+
+    await query.edit_message_text(f"Окей, {user_name}! Какая ниша теперь? (тематика контента)")
+    return ASKING_NICHE
+
+
+async def handle_reuse_edit_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Изменить цель'"""
+    query = update.callback_query
+    await query.answer()
+
+    user_name = context.user_data.get('user_name') or storage.get_user_name(update.effective_user.id) or "дружище"
+
+    await query.edit_message_text(f"Окей, {user_name}! Какая цель? (привлечь, обучить, продать или развлечь)")
+    return ASKING_GOAL
+
+
+async def handle_reuse_edit_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Изменить платформу'"""
+    query = update.callback_query
+    await query.answer()
+
+    user_name = context.user_data.get('user_name') or storage.get_user_name(update.effective_user.id) or "дружище"
+
+    await query.edit_message_text(f"Окей, {user_name}! Какая платформа/формат? (Instagram, TikTok, пост, видео и т.д.)")
+    return ASKING_FORMAT
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена разговора"""
     user_name = context.user_data.get('user_name', 'дружище')
@@ -1100,18 +1208,30 @@ RESPONSE: [твой естественный ответ Каролины]
             )
 
             if has_previous:
-                # Есть предыдущие параметры - спрашиваем подтверждение
+                # Есть предыдущие параметры - спрашиваем подтверждение с кнопками
                 niche = context.user_data.get('niche')
                 goal = context.user_data.get('goal')
                 format_name = context.user_data.get('format')
 
-                confirm_text = f"Отлично! Использовать те же параметры?\n\n"
+                confirm_text = f"Оставим те же настройки?\n\n"
                 confirm_text += f"📋 Ниша: {niche}\n"
                 confirm_text += f"🎯 Цель: {goal}\n"
-                confirm_text += f"📱 Платформа: {format_name}\n\n"
-                confirm_text += "Напиши 'да' чтобы сгенерировать с этими параметрами, или 'нет' чтобы ввести новые"
+                confirm_text += f"📱 Платформа: {format_name}"
 
-                await send_message_with_typing(update, confirm_text, reply_markup=get_main_menu_keyboard())
+                # Кнопки для изменения параметров
+                keyboard = [
+                    [InlineKeyboardButton("✅ Да, оставить", callback_data="reuse_yes")],
+                    [InlineKeyboardButton("✏️ Изменить нишу", callback_data="reuse_edit_niche")],
+                    [InlineKeyboardButton("✏️ Изменить цель", callback_data="reuse_edit_goal")],
+                    [InlineKeyboardButton("✏️ Изменить платформу", callback_data="reuse_edit_format")],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                await send_message_with_typing(update, confirm_text)
+                await update.message.reply_text(
+                    "Выбери действие:",
+                    reply_markup=reply_markup
+                )
                 return ASKING_REUSE_PARAMS
             else:
                 # Нет параметров - начинаем новую сессию
@@ -1458,6 +1578,10 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_and_generate)
             ],
             ASKING_REUSE_PARAMS: [
+                CallbackQueryHandler(handle_reuse_yes, pattern="^reuse_yes$"),
+                CallbackQueryHandler(handle_reuse_edit_niche, pattern="^reuse_edit_niche$"),
+                CallbackQueryHandler(handle_reuse_edit_goal, pattern="^reuse_edit_goal$"),
+                CallbackQueryHandler(handle_reuse_edit_format, pattern="^reuse_edit_format$"),
                 MessageHandler(menu_filter, handle_menu_buttons),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reuse_confirmation)
             ],
