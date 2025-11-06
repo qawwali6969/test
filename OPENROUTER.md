@@ -80,6 +80,23 @@ OPENROUTER_MODEL=google/gemini-pro-1.5         # ~$0.007 / 1K токенов
 
 **Полный список моделей:** https://openrouter.ai/models
 
+#### 🆓 БЕСПЛАТНЫЕ модели (актуально на 2025):
+```env
+# Рекомендуемые бесплатные модели:
+OPENROUTER_MODEL=mistralai/mistral-small-3.1-24b-instruct:free  # 24B параметров, март 2025
+OPENROUTER_MODEL=google/gemma-3-4b-it:free                       # Google Gemma 3, быстрая
+OPENROUTER_MODEL=deepseek/deepseek-r1-distill-llama-70b:free   # 70B параметров, мощная
+```
+
+**⚠️ Важно для бесплатных моделей:**
+- Лимит: 50 запросов/день (или 1000/день если пополнили баланс на $10+)
+- Нужно включить "Privacy Settings" → "Allow training" на openrouter.ai
+- Могут быть очереди в часы пик
+- Если модель недоступна (404 ошибка) - попробуйте другую из списка
+
+**Проблема "No endpoints found"?**
+Модель временно недоступна. Смените на другую бесплатную модель из списка выше.
+
 ---
 
 ## ⚙️ Дополнительные настройки
