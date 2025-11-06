@@ -46,7 +46,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния для ConversationHandler
-ASKING_NAME, ASKING_NICHE, ASKING_GOAL, ASKING_FORMAT = range(4)
+ASKING_NAME, ASKING_NICHE, ASKING_GOAL, ASKING_FORMAT, ASKING_REUSE_PARAMS = range(5)
 
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
@@ -586,6 +586,101 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 
+async def handle_reuse_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик подтверждения повторного использования параметров"""
+    user_text = update.message.text.strip().lower()
+    user_name = context.user_data.get('user_name') or storage.get_user_name(update.effective_user.id) or "дружище"
+
+    logger.info(f"🔄 Подтверждение переиспользования параметров: {user_text}")
+
+    # Определяем утвердительные и отрицательные ответы
+    yes_words = ['да', 'yes', 'д', 'y', 'ага', 'угу', 'конечно', 'давай', 'го', 'ок', 'окей', 'ok', 'okay', '+', '✓']
+    no_words = ['нет', 'no', 'н', 'n', 'не', 'неа', 'нету', 'не надо', '-']
+
+    if any(word in user_text for word in yes_words):
+        # Пользователь согласен - повторяем генерацию с теми же параметрами
+        await send_message_with_typing(
+            update,
+            f"Отлично, {user_name}! Генерирую новые идеи с теми же параметрами 🚀",
+            reply_markup=get_main_menu_keyboard()
+        )
+
+        # Используем сохраненные параметры
+        niche = context.user_data.get('niche')
+        goal = context.user_data.get('goal')
+        format_name = context.user_data.get('format')
+        user_request = f"{niche}, {goal}, {format_name}"
+
+        # Сохраняем запрос
+        context.user_data['user_request'] = user_request
+
+        # Генерируем идеи напрямую (копируем логику из get_format_and_generate)
+        system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+        user_prompt = get_ideas_user_prompt(user_request)
+
+        ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+
+        # Парсим идеи
+        ideas = parse_ideas_response(ideas_text)
+
+        if not ideas:
+            # Если не удалось распарсить идеи
+            fallback_text = f"Вот идеи для тебя, {user_name}! 💡\n\n{ideas_text}\n\n"
+            fallback_text += "Выбери номер идеи (1-5) и я напишу полный пост! 😊"
+
+            await send_typing_action(update, 2.0)
+            await update.message.reply_text(fallback_text)
+
+            context.user_data['ideas_text'] = ideas_text
+            context.user_data['ideas_raw'] = True
+            return ConversationHandler.END
+
+        # Сохраняем идеи
+        context.user_data['ideas'] = ideas
+        context.user_data['ideas_text'] = ideas_text
+
+        # Формируем кнопки
+        keyboard = []
+        for idea in ideas:
+            button_text = f"💡 {idea['number']}. {idea['title']}"
+            keyboard.append([InlineKeyboardButton(
+                button_text,
+                callback_data=f"idea_{idea['number']}"
+            )])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Отправляем идеи
+        response_text = f"Готово, {user_name}! Вот 5 новых идей:\n\n"
+        for idea in ideas:
+            response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
+
+        response_text += "Выбирай какая нравится - напишу готовый пост! 👇"
+
+        await send_typing_action(update, 3.0)
+        await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+        return ConversationHandler.END
+
+    elif any(word in user_text for word in no_words):
+        # Пользователь не согласен - начинаем новую сессию
+        await send_message_with_typing(
+            update,
+            f"Понятно, {user_name}! Давай введём новые параметры 💡",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return await start_command(update, context, skip_greeting=True)
+
+    else:
+        # Непонятный ответ - повторяем вопрос
+        await send_message_with_typing(
+            update,
+            f"Не совсем поняла, {user_name} 😅 Напиши 'да' или 'нет'",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ASKING_REUSE_PARAMS
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена разговора"""
     user_name = context.user_data.get('user_name', 'дружище')
@@ -787,8 +882,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 1. ANOTHER_IDEA - Хочет другую идею из уже показанных или новые идеи
    Примеры: "другую", "давай другую", "плохая идея", "не нравится", "не то", "не подходит", "покажи другие", "есть еще?", "что еще есть?", "другие варианты", "не зашло", "мимо", "слабовато"
 
-2. GENERATE_IDEAS - Сразу начать генерацию НОВЫХ идей
-   Примеры: "давай еще идеи", "придумай еще", "есть ли еще идеи", "еще 5 идей", "новые идеи", "создай идеи", "сгенерируй идеи", "придумай новые", "хочу больше идей"
+2. GENERATE_IDEAS - Сразу начать генерацию НОВЫХ идей (или повторить с теми же параметрами)
+   Примеры: "давай еще идеи", "придумай еще", "есть ли еще идеи", "еще 5 идей", "новые идеи", "создай идеи", "сгенерируй идеи", "придумай новые", "хочу больше идей", "еще", "дай еще", "другие идеи", "еще варианты", "еще раз", "повтори", "сгенерируй еще"
 
 3. NEW_REQUEST - Начать новую сессию с приветствием
    Примеры: "новый запрос", "начать заново", "с нуля", "начать сначала", "заново"
@@ -809,7 +904,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ВАЖНЫЕ ПРАВИЛА РАСПОЗНАВАНИЯ:
 - "другую", "другая", "плохая идея", "не нравится" → ANOTHER_IDEA
-- "еще идеи", "придумай еще", "новые идеи" → GENERATE_IDEAS
+- "еще идеи", "придумай еще", "новые идеи", "еще", "дай еще" → GENERATE_IDEAS
 - "что сохранял", "какие нравились" → SHOW_HISTORY
 - "новый запрос", "заново" → NEW_REQUEST
 
@@ -897,9 +992,33 @@ RESPONSE: [твой естественный ответ Каролины]
                 return await start_command(update, context, skip_greeting=True)
 
         elif 'GENERATE_IDEAS' in intent_line.upper():
-            # Фразы типа "давай еще идеи" - сразу к генерации БЕЗ приветствия
+            # Фразы типа "давай еще идеи" - проверяем есть ли предыдущие параметры
             await send_message_with_typing(update, response_line, reply_markup=get_main_menu_keyboard())
-            return await start_command(update, context, skip_greeting=True)
+
+            # Проверяем есть ли сохраненные параметры
+            has_previous = (
+                context.user_data.get('niche') and
+                context.user_data.get('goal') and
+                context.user_data.get('format')
+            )
+
+            if has_previous:
+                # Есть предыдущие параметры - спрашиваем подтверждение
+                niche = context.user_data.get('niche')
+                goal = context.user_data.get('goal')
+                format_name = context.user_data.get('format')
+
+                confirm_text = f"Отлично! Использовать те же параметры?\n\n"
+                confirm_text += f"📋 Ниша: {niche}\n"
+                confirm_text += f"🎯 Цель: {goal}\n"
+                confirm_text += f"📱 Платформа: {format_name}\n\n"
+                confirm_text += "Напиши 'да' чтобы сгенерировать с этими параметрами, или 'нет' чтобы ввести новые"
+
+                await send_message_with_typing(update, confirm_text, reply_markup=get_main_menu_keyboard())
+                return ASKING_REUSE_PARAMS
+            else:
+                # Нет параметров - начинаем новую сессию
+                return await start_command(update, context, skip_greeting=True)
 
         elif 'NEW_REQUEST' in intent_line.upper():
             # "Новый запрос" - с приветствием
@@ -1093,6 +1212,10 @@ def main():
             ASKING_FORMAT: [
                 MessageHandler(menu_filter, handle_menu_buttons),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_and_generate)
+            ],
+            ASKING_REUSE_PARAMS: [
+                MessageHandler(menu_filter, handle_menu_buttons),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reuse_confirmation)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
