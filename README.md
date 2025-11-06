@@ -128,8 +128,13 @@ python bot.py
 ├── storage.py          # Работа с историей (JSON)
 ├── requirements.txt    # Зависимости Python
 ├── .env.example        # Пример файла с переменными
+├── .env                # Ваши API ключи (не в git!)
+├── .replit             # Конфигурация для Replit
 ├── .gitignore          # Игнорируемые файлы
-├── README.md           # Документация
+├── README.md           # Документация (главная)
+├── REPLIT.md           # Инструкция по деплою на Replit
+├── OPENROUTER.md       # Инструкция по OpenRouter
+├── SUBMISSION.md       # Инструкция по сдаче задания
 └── data/               # Папка для хранения истории
     └── user_history.json
 ```
@@ -239,7 +244,29 @@ python bot.py
 
 ## 🚢 Деплой (бесплатный хостинг)
 
-### Вариант 1: Render.com
+### ⭐ Вариант 1: Replit.com (Рекомендуется!)
+
+**Самый простой способ для новичков!**
+
+1. Зайдите на [replit.com](https://replit.com)
+2. Создайте новый Repl (Python)
+3. Импортируйте код из GitHub или загрузите файлы
+4. Добавьте **Secrets** (🔒 на левой панели):
+   - `TELEGRAM_BOT_TOKEN`
+   - `USE_OPENROUTER=true`
+   - `OPENROUTER_API_KEY`
+   - `OPENROUTER_MODEL=openai/gpt-3.5-turbo`
+5. Нажмите **Run**!
+
+**Подробная инструкция:** См. файл [REPLIT.md](REPLIT.md)
+
+**Преимущества:**
+- ✅ Настраивается за 5 минут
+- ✅ Работает в браузере
+- ✅ Бесплатный тариф
+- ✅ Автоматическая установка зависимостей
+
+### Вариант 2: Render.com
 
 1. Зарегистрируйтесь на [render.com](https://render.com)
 2. Создайте новый **Web Service**
@@ -249,17 +276,19 @@ python bot.py
    - **Start Command**: `python bot.py`
 5. Добавьте переменные окружения (Environment Variables):
    - `TELEGRAM_BOT_TOKEN`
-   - `OPENAI_API_KEY`
+   - `USE_OPENROUTER=true`
+   - `OPENROUTER_API_KEY`
+   - `OPENROUTER_MODEL=openai/gpt-3.5-turbo`
 6. Deploy!
 
-### Вариант 2: Railway.app
+### Вариант 3: Railway.app
 
 1. Зарегистрируйтесь на [railway.app](https://railway.app)
 2. Создайте новый проект из GitHub
 3. Добавьте переменные окружения
 4. Deploy автоматически
 
-### Вариант 3: Локальный сервер
+### Вариант 4: Локальный сервер
 
 Запустите бота на своем компьютере или VPS:
 ```bash
