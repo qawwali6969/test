@@ -158,6 +158,106 @@ def get_random_writing_phrase(idea_number):
     return random.choice(phrases)
 
 
+async def validate_user_answer(user_answer: str, question_context: str, user_name: str) -> dict:
+    """Валидирует ответ пользователя с помощью AI
+
+    Returns:
+        dict: {
+            'status': 'VALID' | 'QUESTION' | 'UNCLEAR' | 'OFF_TOPIC',
+            'response': 'Ответ Каролины если нужно'
+        }
+    """
+    validation_prompt = f"""Ты - Каролина, анализируешь ответ пользователя.
+
+КОНТЕКСТ: Я спросила про {question_context}
+ОТВЕТ ПОЛЬЗОВАТЕЛЯ: "{user_answer}"
+
+Проанализируй ответ и классифицируй:
+
+1. VALID - Нормальный, логичный ответ на вопрос
+   Примеры для ниши: "фитнес", "бизнес и маркетинг", "психология", "кулинария"
+   Примеры для цели: "привлечь аудиторию", "продать", "обучить"
+   Примеры для формата: "пост", "статья", "видео"
+
+2. QUESTION - Пользователь задал ВОПРОС о процессе/боте
+   Примеры: "что такое ниша?", "как выбрать?", "а какие примеры?", "не понял", "что писать?"
+
+3. UNCLEAR - Нелогичный/слишком короткий/неопределённый ответ
+   Примеры: "другое", "не знаю", "хз", "любая", "разное", "всякое", "да"
+
+4. OFF_TOPIC - Совсем не по теме генерации контента
+   Примеры: "как погода?", "расскажи анекдот", "ты кто?"
+
+Ответь в формате:
+
+STATUS: [одна из категорий выше]
+RESPONSE: [твой ответ Каролины если нужно (для QUESTION, UNCLEAR, OFF_TOPIC)]
+
+Для QUESTION:
+- Коротко ответь на вопрос (1-2 предложения)
+- Объясни что нужно ввести
+- Пример: "Ниша - это твоя тематика! Например: фитнес, бизнес, психология, кулинария. Просто напиши чем занимаешься 😊"
+
+Для UNCLEAR:
+- Мягко скажи что ответ не очень понятен
+- Объясни что можно написать
+- Дай примеры
+- Пример: "Хм, '{user_answer}' - это слишком общее 😅 Напиши конкретную тему! Например: фитнес, бизнес, психология, путешествия, кулинария, IT..."
+
+Для OFF_TOPIC:
+- Скажи что это не по теме
+- Напомни свою задачу
+- Предложи начать заново
+- Пример: "Я больше про контент и идеи для постов! 😊 Давай лучше сгенерируем крутые идеи? Начнём заново?"
+
+Для VALID:
+- Не нужен ответ (оставь пустым)
+
+Будь дружелюбной, используй эмодзи, пиши естественно."""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": validation_prompt}],
+            temperature=0.7,
+            max_tokens=150
+        )
+
+        ai_response = response.choices[0].message.content.strip()
+
+        # Парсим ответ
+        status = "VALID"
+        carolina_response = ""
+
+        for line in ai_response.split('\n'):
+            if line.startswith('STATUS:'):
+                status = line.replace('STATUS:', '').strip()
+            elif line.startswith('RESPONSE:'):
+                carolina_response = line.replace('RESPONSE:', '').strip()
+
+        # Если не удалось распарсить - берём весь текст как ответ
+        if not status or status not in ['VALID', 'QUESTION', 'UNCLEAR', 'OFF_TOPIC']:
+            # Фоллбэк логика
+            if any(word in user_answer.lower() for word in ['?', 'как', 'что', 'почему', 'зачем']):
+                status = 'QUESTION'
+                carolina_response = ai_response
+            elif len(user_answer.strip()) < 3 or user_answer.lower() in ['другое', 'не знаю', 'хз', 'любая']:
+                status = 'UNCLEAR'
+                carolina_response = ai_response
+            else:
+                status = 'VALID'
+
+        return {
+            'status': status,
+            'response': carolina_response
+        }
+
+    except Exception as e:
+        logger.error(f"Ошибка валидации ответа: {e}")
+        # В случае ошибки - принимаем ответ
+        return {'status': 'VALID', 'response': ''}
+
+
 # ========== КОМАНДЫ БОТА ==========
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE, skip_greeting: bool = False):
@@ -262,12 +362,30 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем нишу"""
+    """Получаем нишу с валидацией"""
     niche = update.message.text.strip()
-    context.user_data['niche'] = niche
     user_name = context.user_data.get('user_name', 'дружище')
 
-    logger.info(f"🎯 Ниша: {niche}")
+    logger.info(f"🎯 Попытка ввода ниши: {niche}")
+
+    # Валидируем ответ
+    validation = await validate_user_answer(niche, "нишу (тематику контента)", user_name)
+
+    if validation['status'] == 'OFF_TOPIC':
+        # Совсем не по теме - restart
+        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    elif validation['status'] in ['QUESTION', 'UNCLEAR']:
+        # Вопрос или неясный ответ - объясняем и повторяем
+        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
+        # Возвращаем тот же state - будем ждать ответ снова
+        return ASKING_NICHE
+
+    # VALID - принимаем ответ
+    context.user_data['niche'] = niche
+    logger.info(f"✅ Ниша принята: {niche}")
 
     response = f"""Отлично, {user_name}! {niche} - это интересная тема!
 
@@ -287,14 +405,31 @@ async def get_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем цель"""
+    """Получаем цель с валидацией"""
     goal = update.message.text.strip()
-    context.user_data['goal'] = goal
     user_name = context.user_data.get('user_name', 'дружище')
 
-    logger.info(f"🎯 Цель: {goal}")
+    logger.info(f"🎯 Попытка ввода цели: {goal}")
 
-    response = f"""Понял, {user_name}! {goal.capitalize()} - важная задача.
+    # Валидируем ответ
+    validation = await validate_user_answer(goal, "цель контента (что хочешь достичь)", user_name)
+
+    if validation['status'] == 'OFF_TOPIC':
+        # Совсем не по теме - restart
+        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    elif validation['status'] in ['QUESTION', 'UNCLEAR']:
+        # Вопрос или неясный ответ - объясняем и повторяем
+        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
+        return ASKING_GOAL
+
+    # VALID - принимаем ответ
+    context.user_data['goal'] = goal
+    logger.info(f"✅ Цель принята: {goal}")
+
+    response = f"""Поняла, {user_name}! {goal.capitalize()} - важная задача.
 
 **Третий вопрос: Формат**
 
@@ -313,14 +448,31 @@ async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем формат и генерируем идеи"""
+    """Получаем формат с валидацией и генерируем идеи"""
     format_type = update.message.text.strip()
-    context.user_data['format'] = format_type
     user_name = context.user_data.get('user_name', 'дружище')
     niche = context.user_data.get('niche')
     goal = context.user_data.get('goal')
 
-    logger.info(f"📝 Формат: {format_type}")
+    logger.info(f"📝 Попытка ввода формата: {format_type}")
+
+    # Валидируем ответ
+    validation = await validate_user_answer(format_type, "формат контента (пост, статья, видео и т.д.)", user_name)
+
+    if validation['status'] == 'OFF_TOPIC':
+        # Совсем не по теме - restart
+        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    elif validation['status'] in ['QUESTION', 'UNCLEAR']:
+        # Вопрос или неясный ответ - объясняем и повторяем
+        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
+        return ASKING_FORMAT
+
+    # VALID - принимаем ответ
+    context.user_data['format'] = format_type
+    logger.info(f"✅ Формат принят: {format_type}")
     logger.info(f"🚀 Генерация для: ниша={niche}, цель={goal}, формат={format_type}")
 
     # Показываем "печатает..." и отправляем сообщение
