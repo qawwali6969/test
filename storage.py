@@ -86,6 +86,35 @@ class Storage:
             history[user_id_str] = []
             self._save_history(history)
 
+    def save_user_name(self, user_id: int, name: str):
+        """Сохраняет имя пользователя"""
+        history = self._load_history()
+        user_id_str = str(user_id)
+
+        if user_id_str not in history:
+            history[user_id_str] = []
+
+        # Сохраняем имя как специальный тип записи
+        # Сначала удаляем старое имя если есть
+        history[user_id_str] = [item for item in history[user_id_str] if item.get('type') != 'user_name']
+
+        # Добавляем новое имя
+        history[user_id_str].insert(0, {
+            'type': 'user_name',
+            'name': name,
+            'timestamp': datetime.now().isoformat()
+        })
+
+        self._save_history(history)
+
+    def get_user_name(self, user_id: int) -> str:
+        """Получает сохранённое имя пользователя"""
+        user_history = self.get_user_history(user_id)
+        for item in user_history:
+            if item.get('type') == 'user_name':
+                return item.get('name', '')
+        return ''
+
 
 # Создаем глобальный экземпляр
 storage = Storage()

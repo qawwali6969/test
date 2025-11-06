@@ -4,7 +4,7 @@ Telegram-бот для генерации контент-идей с помощ�
 import logging
 import re
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -124,12 +124,50 @@ async def call_openai(system_prompt: str, user_prompt: str, temperature: float =
         return f"Ошибка при генерации: {str(e)}"
 
 
+def get_main_menu_keyboard():
+    """Возвращает клавиатуру главного меню"""
+    keyboard = [
+        [KeyboardButton("🆕 Новый запрос"), KeyboardButton("📚 Мои посты")],
+        [KeyboardButton("❌ Отмена")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
 # ========== КОМАНДЫ БОТА ==========
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start - начало диалога с Каролиной"""
-    logger.info(f"📥 Новый пользователь: {update.effective_user.id}")
+    logger.info(f"📥 Пользователь: {update.effective_user.id}")
 
+    user_id = update.effective_user.id
+    saved_name = storage.get_user_name(user_id)
+
+    # Если имя уже сохранено - пропускаем вопрос
+    if saved_name:
+        context.user_data['user_name'] = saved_name
+        logger.info(f"👤 Возвращается пользователь: {saved_name}")
+
+        welcome_text = f"""👋 Привет, {saved_name}! Рада тебя снова видеть!
+
+Давай создадим что-то крутое?
+
+**Первый вопрос: Ниша**
+
+В какой области ты создаёшь контент? Это может быть что угодно:
+• Фитнес и здоровье
+• Бизнес и предпринимательство
+• Образование и обучение
+• Технологии и IT
+• Психология и саморазвитие
+• Кулинария
+• Или что-то другое?
+
+Просто напиши своими словами - какая у тебя ниша."""
+
+        await send_message_with_typing(update, welcome_text, reply_markup=get_main_menu_keyboard())
+        return ASKING_NICHE
+
+    # Если имя не сохранено - спрашиваем
     welcome_text = """👋 Привет! Меня зовут Каролина.
 
 Я твой личный креативный ассистент по написанию постов и генерации идей для контента.
@@ -138,14 +176,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Как тебя зовут?"""
 
-    await send_message_with_typing(update, welcome_text)
+    await send_message_with_typing(update, welcome_text, reply_markup=get_main_menu_keyboard())
     return ASKING_NAME
 
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получаем имя пользователя"""
     user_name = update.message.text.strip()
+    user_id = update.effective_user.id
+
     context.user_data['user_name'] = user_name
+
+    # Сохраняем имя в storage
+    storage.save_user_name(user_id, user_name)
 
     logger.info(f"👤 Пользователь представился: {user_name}")
 
@@ -168,7 +211,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Просто напиши своими словами - какая у тебя ниша."""
 
-    await send_message_with_typing(update, response)
+    await send_message_with_typing(update, response, reply_markup=get_main_menu_keyboard())
     return ASKING_NICHE
 
 
@@ -292,7 +335,8 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
     for idea in ideas:
         response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
 
-    response_text += "Выбирай какая нравится - напишу готовый пост! 👇"
+    response_text += "Выбирай какая нравится - напишу готовый пост! 👇\n\n"
+    response_text += "💡 _Совет: Нажми на текст идеи чтобы скопировать его_"
 
     # Показываем typing перед отправкой идей
     await send_typing_action(update, 3.0)  # 3 секунды - идеи большие
@@ -315,25 +359,57 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /history"""
     user_id = update.effective_user.id
+    user_name = storage.get_user_name(user_id) or "дружище"
     favorites = storage.get_favorites(user_id)
 
     if not favorites:
-        await update.message.reply_text("У тебя пока нет сохраненных постов.")
+        await update.message.reply_text(
+            f"У тебя пока нет сохранённых постов, {user_name} 🤷‍♀️\n\n"
+            "Когда сгенерируешь пост - нажми кнопку '💾 Сохранить в избранное' чтобы он появился здесь!",
+            reply_markup=get_main_menu_keyboard()
+        )
         return
 
-    await update.message.reply_text(f"📚 Твои сохраненные посты ({len(favorites)}):\n")
+    await update.message.reply_text(
+        f"📚 Твои сохранённые посты, {user_name} ({len(favorites)}):\n",
+        reply_markup=get_main_menu_keyboard()
+    )
 
     for idx, fav in enumerate(favorites, 1):
         timestamp = fav.get('timestamp', 'Неизвестно')
         idea = fav.get('idea', 'Без описания')
         post = fav.get('post', '')
+        request = fav.get('request', '')
 
         text = f"#{idx} | {timestamp[:10]}\n\n"
+        if request:
+            text += f"📋 Запрос: {request}\n\n"
         text += f"💡 Идея: {idea}\n\n"
         text += f"📝 Пост:\n{post}\n"
         text += "—" * 30
 
         await update.message.reply_text(text)
+
+
+async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на кнопки меню"""
+    text = update.message.text
+
+    if text == "🆕 Новый запрос":
+        # Запускаем start_command
+        return await start_command(update, context)
+    elif text == "📚 Мои посты":
+        # Показываем историю
+        return await history_command(update, context)
+    elif text == "❌ Отмена":
+        # Отменяем текущее действие
+        user_name = context.user_data.get('user_name') or storage.get_user_name(update.effective_user.id) or "дружище"
+        await send_message_with_typing(
+            update,
+            f"Хорошо, {user_name}! Если захочешь начать заново - нажми '🆕 Новый запрос' 😊",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return ConversationHandler.END
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,10 +497,11 @@ async def handle_idea_selection(update: Update, context: ContextTypes.DEFAULT_TY
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Отправляем готовый пост
-    response_text = f"📝 Готовый пост:\n\n{post_text}"
+    # Отправляем готовый пост в код-блоке для удобного копирования
+    response_text = f"📝 Готовый пост:\n\n```\n{post_text}\n```\n\n"
+    response_text += "💡 _Нажми на текст поста чтобы скопировать его_"
 
-    await query.message.reply_text(response_text, reply_markup=reply_markup)
+    await query.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 
 # ========== ДЕЙСТВИЯ ПОСЛЕ ГЕНЕРАЦИИ ==========
@@ -500,17 +577,33 @@ def main():
     # Создаем приложение
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Создаём фильтр для кнопок меню
+    menu_filter = filters.Regex("^(🆕 Новый запрос|📚 Мои посты|❌ Отмена)$")
+
     # Conversation Handler для диалога с Каролиной
     conversation_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start_command),
-            CommandHandler("new", start_command)  # /new тоже запускает диалог
+            CommandHandler("new", start_command),  # /new тоже запускает диалог
+            MessageHandler(menu_filter, handle_menu_buttons)  # Кнопки меню
         ],
         states={
-            ASKING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            ASKING_NICHE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_niche)],
-            ASKING_GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_goal)],
-            ASKING_FORMAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_and_generate)],
+            ASKING_NAME: [
+                MessageHandler(menu_filter, handle_menu_buttons),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)
+            ],
+            ASKING_NICHE: [
+                MessageHandler(menu_filter, handle_menu_buttons),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_niche)
+            ],
+            ASKING_GOAL: [
+                MessageHandler(menu_filter, handle_menu_buttons),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_goal)
+            ],
+            ASKING_FORMAT: [
+                MessageHandler(menu_filter, handle_menu_buttons),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_and_generate)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
