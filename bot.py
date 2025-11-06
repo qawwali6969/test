@@ -17,6 +17,7 @@ from telegram.ext import (
     filters
 )
 from openai import OpenAI
+from nlp_utils import smart_parse_user_request, looks_like_content_request, extract_missing_fields
 
 from config import (
     TELEGRAM_BOT_TOKEN,
@@ -585,6 +586,12 @@ async def get_format_and_generate(update: Update, context: ContextTypes.DEFAULT_
             callback_data=f"idea_{idea['number']}"
         )])
 
+    # Дополнительные кнопки
+    keyboard.append([
+        InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+        InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+    ])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Отправляем идеи с имитацией печатания
@@ -679,6 +686,12 @@ async def handle_reuse_confirmation(update: Update, context: ContextTypes.DEFAUL
                 button_text,
                 callback_data=f"idea_{idea['number']}"
             )])
+
+        # Дополнительные кнопки
+        keyboard.append([
+            InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+            InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+        ])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1014,6 +1027,12 @@ RESPONSE: [твой естественный ответ Каролины]
                         callback_data=f"idea_{idea['number']}"
                     )])
 
+                # Дополнительные кнопки
+                keyboard.append([
+                    InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+                    InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+                ])
+
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
                 choice_text = f"Вот все 5 идей, {user_name}! Выбирай какая нравится 👇"
@@ -1088,6 +1107,129 @@ RESPONSE: [твой естественный ответ Каролины]
 
 
 # ========== ВЫБОР ИДЕИ И ГЕНЕРАЦИЯ ПОСТА ==========
+
+
+async def handle_random_idea(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Случайная идея'"""
+    query = update.callback_query
+    await query.answer()
+
+    ideas = context.user_data.get('ideas', [])
+    if not ideas:
+        await query.answer("Идей пока нет. Начни заново с /new", show_alert=True)
+        return
+
+    # Выбираем случайную идею
+    selected_idea = random.choice(ideas)
+    context.user_data['selected_idea'] = selected_idea
+
+    user_name = context.user_data.get('user_name', 'дружище')
+
+    # Сообщение о выборе
+    await query.edit_message_text(f"🎲 Выбрала случайную идею #{selected_idea['number']}!\n\nСейчас напишу пост...")
+
+    # Формируем промпт для генерации поста
+    user_request = context.user_data.get('user_request', '')
+    selected_idea_text = f"{selected_idea['title']}\n{selected_idea['description']}"
+
+    system_prompt = SYSTEM_PROMPT + "\n\n" + POST_GENERATION_PROMPT
+    user_prompt = get_post_user_prompt(user_request, selected_idea_text)
+
+    try:
+        # Генерируем пост
+        post_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+        context.user_data['generated_post'] = post_text
+    except Exception as e:
+        logger.error(f"Ошибка при генерации поста (random): {e}")
+        error_msg = "Ой, кажется возникла проблема 😔\n\n"
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            error_msg += "Исчерпан лимит бесплатных запросов. Попробуй позже 💡"
+        else:
+            error_msg += "Что-то пошло не так. Попробуй ещё раз 🔄"
+        await query.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+        return
+
+    # Кнопки после генерации
+    keyboard = [
+        [InlineKeyboardButton("💾 Сохранить в избранное", callback_data="save_favorite")],
+        [InlineKeyboardButton("🔄 Другая идея", callback_data="another_idea")],
+        [InlineKeyboardButton("🆕 Новый запрос", callback_data="new_request")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    response_text = f"📝 Готовый пост:\n\n```\n{post_text}\n```\n\n"
+    response_text += "💡 _Нажми на текст поста чтобы скопировать его_"
+
+    await query.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+
+async def handle_regenerate_ideas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Еще 5 идей' - регенерирует с теми же параметрами"""
+    query = update.callback_query
+    await query.answer()
+
+    # Проверяем что есть параметры
+    user_request = context.user_data.get('user_request')
+    user_name = context.user_data.get('user_name', 'дружище')
+
+    if not user_request:
+        await query.answer("Параметры не найдены. Начни заново с /new", show_alert=True)
+        return
+
+    await query.edit_message_text(f"Окей, {user_name}! Генерирую еще 5 идей с теми же параметрами 🔄")
+
+    try:
+        # Генерируем новые идеи
+        system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+        user_prompt = get_ideas_user_prompt(user_request)
+
+        ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+        ideas = parse_ideas(ideas_text)
+    except Exception as e:
+        logger.error(f"Ошибка при регенерации идей: {e}")
+        error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
+        if "429" in str(e) or "rate limit" in str(e).lower():
+            error_msg += "Исчерпан лимит бесплатных запросов. Попробуй позже 💡"
+        else:
+            error_msg += "Что-то пошло не так. Попробуй ещё раз 🔄"
+        await query.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+        return
+
+    if not ideas or len(ideas) < 5:
+        # Fallback если парсинг не удался
+        fallback_text = f"Вот новые идеи, {user_name}:\n\n{ideas_text}\n\n"
+        fallback_text += "Напиши номер идеи (1-5) для генерации поста"
+        await query.message.reply_text(fallback_text)
+        return
+
+    # Сохраняем новые идеи
+    context.user_data['ideas'] = ideas
+    context.user_data['ideas_text'] = ideas_text
+
+    # Формируем кнопки
+    keyboard = []
+    for idea in ideas:
+        button_text = f"💡 {idea['number']}. {idea['title']}"
+        keyboard.append([InlineKeyboardButton(
+            button_text,
+            callback_data=f"idea_{idea['number']}"
+        )])
+
+    # Дополнительные кнопки
+    keyboard.append([
+        InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+        InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+    ])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Отправляем новые идеи
+    response_text = f"Готово, {user_name}! Вот 5 новых идей:\n\n"
+    for idea in ideas:
+        response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
+    response_text += "Выбирай какая нравится! 👇"
+
+    await query.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 
 # ========== ГЕНЕРАЦИЯ ПОСТА ==========
@@ -1286,7 +1428,15 @@ def main():
     # Обработчики callback кнопок
     application.add_handler(CallbackQueryHandler(
         handle_idea_selection,
-        pattern="^idea_"
+        pattern="^idea_\d+$"  # Только idea_1, idea_2 и т.д.
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handle_random_idea,
+        pattern="^idea_random$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handle_regenerate_ideas,
+        pattern="^ideas_regenerate$"
     ))
     application.add_handler(CallbackQueryHandler(
         handle_post_actions,
