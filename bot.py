@@ -855,11 +855,57 @@ async def view_saved_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"```\n{post}\n```\n\n"
     text += "💡 _Нажми на текст поста чтобы скопировать_"
 
-    # Кнопка "Назад" возвращает на ту же страницу
-    keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"history_page_{from_page}")]]
+    # Кнопки: "Назад" и "Удалить"
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"history_page_{from_page}")],
+        [InlineKeyboardButton("🗑 Удалить этот пост", callback_data=f"delete_post_{post_idx}_{from_page}")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+
+async def delete_saved_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет сохраненный пост"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим callback_data: "delete_post_{index}_{page}"
+    parts = query.data.split('_')
+    post_idx = int(parts[2])
+    from_page = int(parts[3])
+
+    user_id = update.effective_user.id
+
+    # Удаляем пост
+    success = storage.delete_favorite(user_id, post_idx)
+
+    if success:
+        await query.answer("✅ Пост удален", show_alert=True)
+
+        # Проверяем сколько постов осталось
+        favorites = storage.get_favorites(user_id)
+
+        if not favorites:
+            # Постов не осталось - показываем сообщение
+            user_name = storage.get_user_name(user_id) or "дружище"
+            await query.edit_message_text(
+                f"У тебя пока нет сохранённых постов, {user_name} 🤷‍♀️\n\n"
+                "Когда сгенерируешь пост - нажми кнопку '💾 Сохранить в избранное' чтобы он появился здесь!",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            # Есть еще посты - возвращаемся к списку
+            # Проверяем что страница еще валидна
+            POSTS_PER_PAGE = 5
+            total_pages = (len(favorites) + POSTS_PER_PAGE - 1) // POSTS_PER_PAGE
+
+            if from_page >= total_pages:
+                from_page = total_pages - 1
+
+            await show_history_page(update, context, page=from_page)
+    else:
+        await query.answer("❌ Не удалось удалить пост", show_alert=True)
 
 
 async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1449,6 +1495,10 @@ def main():
     application.add_handler(CallbackQueryHandler(
         view_saved_post,
         pattern="^view_post_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        delete_saved_post,
+        pattern="^delete_post_"
     ))
 
     # Запускаем бота

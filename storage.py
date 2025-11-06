@@ -77,6 +77,46 @@ class Storage:
         user_history = self.get_user_history(user_id)
         return [item for item in user_history if item.get('type') == 'favorite']
 
+    def delete_favorite(self, user_id: int, index: int) -> bool:
+        """Удаляет избранный пост по индексу
+
+        Args:
+            user_id: ID пользователя
+            index: Индекс поста в списке favorites (0-based)
+
+        Returns:
+            bool: True если удаление успешно, False если пост не найден
+        """
+        history = self._load_history()
+        user_id_str = str(user_id)
+
+        if user_id_str not in history:
+            return False
+
+        user_items = history[user_id_str]
+
+        # Получаем только favorites
+        favorites = [item for item in user_items if item.get('type') == 'favorite']
+
+        if index < 0 or index >= len(favorites):
+            return False
+
+        # Находим целевой пост
+        target_post = favorites[index]
+
+        # Удаляем его из общего списка
+        # Ищем по полному совпадению
+        for i, item in enumerate(user_items):
+            if (item.get('type') == 'favorite' and
+                item.get('post') == target_post.get('post') and
+                item.get('timestamp') == target_post.get('timestamp')):
+                user_items.pop(i)
+                break
+
+        history[user_id_str] = user_items
+        self._save_history(history)
+        return True
+
     def clear_user_history(self, user_id: int):
         """Очищает историю пользователя"""
         history = self._load_history()
