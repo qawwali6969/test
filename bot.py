@@ -101,6 +101,7 @@ async def call_openai(system_prompt: str, user_prompt: str, temperature: float =
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
+    logger.info(f"📥 Получена команда /start от пользователя {update.effective_user.id}")
     welcome_text = """👋 Привет! Я AI-генератор контент-идей.
 
 Просто опиши мне, что нужно:
@@ -119,6 +120,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /help - помощь"""
 
     await update.message.reply_text(welcome_text)
+    logger.info(f"✅ Отправлен ответ на /start пользователю {update.effective_user.id}")
 
 
 async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -391,7 +393,10 @@ def main():
 
     # Запускаем бота
     logger.info("🤖 Бот запущен!")
+    logger.info("📡 Начинаю получать обновления от Telegram...")
+    logger.info(f"🔗 Бот доступен: https://t.me/{application.bot.username if hasattr(application, 'bot') else 'bot'}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("⛔ Бот остановлен")
 
 
 if __name__ == '__main__':
