@@ -534,7 +534,6 @@ def main():
     # Запускаем бота
     logger.info("🤖 Бот запущен!")
     logger.info("📡 Начинаю получать обновления от Telegram...")
-    logger.info(f"🔗 Бот доступен: https://t.me/{application.bot.username if hasattr(application, 'bot') else 'bot'}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
     logger.info("⛔ Бот остановлен")
 
