@@ -598,7 +598,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /history"""
+    """Обработчик команды /history - показывает первую страницу"""
     user_id = update.effective_user.id
     user_name = storage.get_user_name(user_id) or "дружище"
     favorites = storage.get_favorites(user_id)
@@ -611,26 +611,115 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text(
-        f"📚 Твои сохранённые посты, {user_name} ({len(favorites)}):\n",
-        reply_markup=get_main_menu_keyboard()
-    )
+    # Показываем первую страницу
+    await show_history_page(update, context, page=0)
 
-    for idx, fav in enumerate(favorites, 1):
-        timestamp = fav.get('timestamp', 'Неизвестно')
-        idea = fav.get('idea', 'Без описания')
-        post = fav.get('post', '')
-        request = fav.get('request', '')
 
-        text = f"#{idx} | {timestamp[:10]}\n\n"
-        if request:
-            text += f"📋 Запрос: {request}\n\n"
-        text += f"💡 Идея: {idea}\n\n"
-        text += f"📝 Пост:\n```\n{post}\n```\n"
-        text += "💡 _Нажми на текст поста чтобы скопировать_\n"
-        text += "—" * 30
+async def show_history_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    """Показывает страницу с сохраненными постами (по 5 штук)"""
+    user_id = update.effective_user.id
+    user_name = storage.get_user_name(user_id) or "дружище"
+    favorites = storage.get_favorites(user_id)
 
-        await update.message.reply_text(text, parse_mode='Markdown')
+    POSTS_PER_PAGE = 5
+    total_posts = len(favorites)
+    total_pages = (total_posts + POSTS_PER_PAGE - 1) // POSTS_PER_PAGE  # Округление вверх
+
+    # Проверка валидности страницы
+    if page < 0:
+        page = 0
+    if page >= total_pages:
+        page = total_pages - 1
+
+    start_idx = page * POSTS_PER_PAGE
+    end_idx = min(start_idx + POSTS_PER_PAGE, total_posts)
+    page_posts = favorites[start_idx:end_idx]
+
+    # Формируем текст заголовка
+    text = f"📚 Твои сохранённые посты, {user_name}\n"
+    text += f"Страница {page + 1} из {total_pages} (всего {total_posts})\n\n"
+    text += "Выбери пост чтобы открыть:"
+
+    # Создаём кнопки для каждого поста
+    keyboard = []
+    for i, fav in enumerate(page_posts):
+        actual_idx = start_idx + i  # Реальный индекс в полном списке
+        request = fav.get('request', 'Без запроса')
+        timestamp = fav.get('timestamp', '')[:10]  # Только дата
+
+        # Миниатюра: первые 40 символов запроса + дата
+        preview = request[:40] + "..." if len(request) > 40 else request
+        button_text = f"#{actual_idx + 1} • {preview}"
+
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"view_post_{actual_idx}_{page}")])
+
+    # Кнопки навигации
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"history_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Дальше ➡️", callback_data=f"history_page_{page + 1}"))
+
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Отправляем или редактируем сообщение
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+
+
+async def handle_history_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик пагинации истории постов"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим callback_data: "history_page_{page}"
+    page = int(query.data.split('_')[2])
+
+    await show_history_page(update, context, page=page)
+
+
+async def view_saved_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает конкретный сохраненный пост"""
+    query = update.callback_query
+    await query.answer()
+
+    # Парсим callback_data: "view_post_{index}_{page}"
+    parts = query.data.split('_')
+    post_idx = int(parts[2])
+    from_page = int(parts[3])
+
+    user_id = update.effective_user.id
+    favorites = storage.get_favorites(user_id)
+
+    if post_idx >= len(favorites):
+        await query.edit_message_text("Ошибка: пост не найден")
+        return
+
+    fav = favorites[post_idx]
+    timestamp = fav.get('timestamp', 'Неизвестно')
+    idea = fav.get('idea', 'Без описания')
+    post = fav.get('post', '')
+    request = fav.get('request', '')
+
+    # Формируем текст с постом
+    text = f"📝 Пост #{post_idx + 1}\n"
+    text += f"📅 {timestamp[:10]}\n\n"
+    if request:
+        text += f"📋 Запрос: {request}\n\n"
+    text += f"💡 Идея: {idea}\n\n"
+    text += f"```\n{post}\n```\n\n"
+    text += "💡 _Нажми на текст поста чтобы скопировать_"
+
+    # Кнопка "Назад" возвращает на ту же страницу
+    keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"history_page_{from_page}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 
 async def handle_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1023,6 +1112,14 @@ def main():
     application.add_handler(CallbackQueryHandler(
         handle_post_actions,
         pattern="^(save_favorite|another_idea|new_request)$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handle_history_pagination,
+        pattern="^history_page_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        view_saved_post,
+        pattern="^view_post_"
     ))
 
     # Запускаем бота
