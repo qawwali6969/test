@@ -804,7 +804,7 @@ async def handle_reuse_confirmation(update: Update, context: ContextTypes.DEFAUL
             ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
 
             # Парсим идеи
-            ideas = parse_ideas_response(ideas_text)
+            ideas = parse_ideas(ideas_text)
         except Exception as e:
             logger.error(f"Ошибка при генерации идей (reuse): {e}")
 
@@ -909,7 +909,7 @@ async def handle_reuse_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_prompt = get_ideas_user_prompt(user_request)
 
         ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
-        ideas = parse_ideas_response(ideas_text)
+        ideas = parse_ideas(ideas_text)
     except Exception as e:
         logger.error(f"Ошибка при генерации идей (reuse yes): {e}")
         error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
