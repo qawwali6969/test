@@ -415,22 +415,7 @@ async def get_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"🎯 Попытка ввода ниши: {niche}")
 
-    # Валидируем ответ
-    validation = await validate_user_answer(update, niche, "нишу (тематику контента)", user_name)
-
-    if validation['status'] == 'OFF_TOPIC':
-        # Совсем не по теме - restart
-        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    elif validation['status'] in ['QUESTION', 'UNCLEAR']:
-        # Вопрос или неясный ответ - объясняем и повторяем
-        await send_message_with_typing(update, validation['response'], reply_markup=get_main_menu_keyboard())
-        # Возвращаем тот же state - будем ждать ответ снова
-        return ASKING_NICHE
-
-    # VALID - пробуем извлечь дополнительные параметры из текста
+    # СНАЧАЛА пробуем умный парсер - может все параметры уже есть?
     parsed = smart_parse_user_request(niche)
     missing = extract_missing_fields(parsed)
 
@@ -499,11 +484,38 @@ async def get_niche(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
         return ConversationHandler.END
 
-    # Только ниша найдена - продолжаем обычный flow
-    context.user_data['niche'] = parsed.get('niche') or niche
-    logger.info(f"✅ Ниша принята: {context.user_data['niche']}")
+    # Нашли что-то, но не всё - сохраняем ВСЕ найденные параметры
+    if parsed['niche']:
+        context.user_data['niche'] = parsed['niche']
+    else:
+        context.user_data['niche'] = niche  # Fallback на весь ввод
 
-    response = f"""Отлично, {user_name}! {context.user_data['niche']} - это интересная тема!
+    if parsed['goal']:
+        context.user_data['goal'] = parsed['goal']
+        logger.info(f"✨ Парсер также нашел цель: {parsed['goal']}")
+
+    if parsed['format']:
+        context.user_data['format'] = parsed['format']
+        logger.info(f"✨ Парсер также нашел формат: {parsed['format']}")
+
+    logger.info(f"✅ Ниша принята: {context.user_data['niche']}")
+    logger.info(f"📊 Недостающие параметры: {missing}")
+
+    # Проверяем что ещё нужно спросить
+    if 'goal' not in missing and 'format' not in missing:
+        # Есть всё кроме ниши (но мы уже в get_niche, так что это странно)
+        # На всякий случай идём дальше
+        pass
+
+    # Если есть формат, но нет цели - спросим цель, потом сразу в генерацию
+    # Если нет формата - спросим цель, потом формат как обычно
+
+    response = f"""Отлично, {user_name}! {context.user_data['niche']} - это интересная тема!"""
+
+    if 'format' in context.user_data:
+        response += f" И формат тоже понял - {context.user_data['format']} 👍"
+
+    response += f"""
 
 **Второй вопрос: Цель контента**
 
@@ -545,6 +557,76 @@ async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['goal'] = goal
     logger.info(f"✅ Цель принята: {goal}")
 
+    # Проверяем - может формат уже был распознан парсером?
+    if 'format' in context.user_data and context.user_data['format']:
+        # Формат уже есть! Пропускаем вопрос о формате и сразу генерируем
+        niche = context.user_data.get('niche')
+        format_type = context.user_data['format']
+
+        logger.info(f"✨ Формат уже был распознан: {format_type}. Пропускаем ASKING_FORMAT")
+        logger.info(f"🚀 Генерация для: ниша={niche}, цель={goal}, формат={format_type}")
+
+        # Показываем итоги и начинаем генерацию
+        summary_text = f"Супер, {user_name}! Все данные собраны 📋\n\n" \
+                       f"Ниша: {niche}\n" \
+                       f"Цель: {goal}\n" \
+                       f"Формат: {format_type}\n\n" \
+                       f"{get_random_thinking_phrase()}"
+
+        await send_message_with_typing(update, summary_text)
+
+        # Формируем запрос для AI
+        user_request = f"Ниша: {niche}. Цель: {goal}. Формат: {format_type}"
+        context.user_data['user_request'] = user_request
+
+        try:
+            # Генерируем идеи с typing action
+            system_prompt = SYSTEM_PROMPT + "\n\n" + IDEAS_GENERATION_PROMPT
+            user_prompt = get_ideas_user_prompt(user_request)
+            ideas_text = await call_openai_with_typing(update, system_prompt, user_prompt)
+            ideas = parse_ideas(ideas_text)
+        except Exception as e:
+            logger.error(f"Ошибка при генерации идей (smart goal): {e}")
+            error_msg = f"Ой, {user_name}, кажется возникла проблема 😔\n\n"
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                error_msg += "Исчерпан лимит бесплатных запросов. Попробуй позже 💡"
+            else:
+                error_msg += "Что-то пошло не так. Попробуй ещё раз 🔄"
+            await update.message.reply_text(error_msg, reply_markup=get_main_menu_keyboard())
+            return ConversationHandler.END
+
+        if not ideas or len(ideas) < 5:
+            fallback_text = f"Вот идеи для тебя, {user_name}:\n\n{ideas_text}\n\n"
+            fallback_text += "Напиши номер идеи (1-5) для генерации поста"
+            await update.message.reply_text(fallback_text)
+            context.user_data['ideas_text'] = ideas_text
+            context.user_data['ideas_raw'] = True
+            return ConversationHandler.END
+
+        context.user_data['ideas'] = ideas
+        context.user_data['ideas_text'] = ideas_text
+
+        keyboard = []
+        for idea in ideas:
+            button_text = f"💡 {idea['number']}. {idea['title']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"idea_{idea['number']}")])
+
+        keyboard.append([
+            InlineKeyboardButton("🎲 Случайная идея", callback_data="idea_random"),
+            InlineKeyboardButton("🔄 Еще 5 идей", callback_data="ideas_regenerate")
+        ])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        response_text = f"Готово, {user_name}! Вот 5 идей:\n\n"
+        for idea in ideas:
+            response_text += f"{idea['number']}. **{idea['title']}**\n{idea['description']}\n\n"
+        response_text += "Выбирай какая нравится! 👇"
+
+        await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
+        return ConversationHandler.END
+
+    # Формата нет - спрашиваем как обычно
     response = f"""Поняла, {user_name}! {goal.capitalize()} - важная задача.
 
 **Третий вопрос: Формат**
