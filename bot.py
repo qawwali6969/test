@@ -539,6 +539,14 @@ async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"🎯 Попытка ввода цели: {goal}")
 
+    # СНАЧАЛА пробуем умный парсер - может пользователь указал формат в ответе?
+    parsed = smart_parse_user_request(goal)
+
+    # Если парсер нашел формат, который еще не был сохранен - сохраняем
+    if parsed['format'] and 'format' not in context.user_data:
+        context.user_data['format'] = parsed['format']
+        logger.info(f"✨ Парсер нашел формат в ответе на цель: {parsed['format']}")
+
     # Валидируем ответ
     validation = await validate_user_answer(update, goal, "цель контента (что хочешь достичь)", user_name)
 

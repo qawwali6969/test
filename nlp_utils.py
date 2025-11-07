@@ -66,6 +66,24 @@ def normalize_format(format_word: str) -> str:
     return format_word
 
 
+def is_format_word(word: str) -> bool:
+    """
+    Проверяет является ли слово форматом (в любой форме)
+
+    Args:
+        word: Слово для проверки
+
+    Returns:
+        bool: True если это формат
+    """
+    word = word.lower().strip()
+    # Проверяем точное совпадение с любым вариантом формата
+    for base, variants in FORMAT_SYNONYMS.items():
+        if word in variants:
+            return True
+    return False
+
+
 def smart_parse_user_request(text: str) -> dict:
     """
     Пытается извлечь нишу, цель и формат из свободного текста
@@ -107,19 +125,26 @@ def smart_parse_user_request(text: str) -> dict:
     niche = None
 
     # 1. Шаблоны "для X", "про X", "о X", "по X"
+    # Важно: ищем ВСЕ совпадения, не только первое, чтобы пропустить форматы
     patterns = [
-        r"(?:для|про|о|по)\s+([а-яё0-9 \-]+?)(?:\.|,|\s+(?:чтобы|для|про|формат|цель)|$)",
+        r"про\s+([а-яё0-9 \-]+?)(?:\.|,|\s+(?:чтобы|для|про|формат|цель)|$)",  # "про X" - обычно это ниша
+        r"(?:для|о|по)\s+([а-яё0-9 \-]+?)(?:\.|,|\s+(?:чтобы|для|про|формат|цель)|$)",
         r"ниш[аеу][\s:]+([а-яё0-9 \-]+?)(?:\.|,|$)",
     ]
 
     for pattern in patterns:
-        m = re.search(pattern, t, re.IGNORECASE)
-        if m:
+        # Ищем все совпадения паттерна
+        matches = re.finditer(pattern, t, re.IGNORECASE)
+        for m in matches:
             candidate = m.group(1).strip(" .,")
-            # Фильтруем стоп-слова
-            if candidate and len(candidate) > 2 and candidate not in ["этого", "того", "этом"]:
+            # Фильтруем: стоп-слова, форматы, слишком короткие
+            if (candidate and len(candidate) > 2 and
+                candidate not in ["этого", "того", "этом"] and
+                not is_format_word(candidate)):
                 niche = candidate
                 break
+        if niche:
+            break
 
     # 2. Запасной вариант: первая часть до запятой или двоеточия
     if not niche:
